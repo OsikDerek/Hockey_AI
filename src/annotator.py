@@ -78,8 +78,16 @@ class SkatingAnnotator:
         frame: np.ndarray,
         landmarks: Optional[dict],
         mechanic_results: Optional[list[MechanicResult]] = None,
+        crossover_events: Optional[list] = None,
     ) -> np.ndarray:
-        """Render all annotations onto a frame."""
+        """Render all annotations onto a frame.
+
+        Args:
+            frame: BGR frame.
+            landmarks: Landmark dict or None.
+            mechanic_results: Per-frame mechanic ratings.
+            crossover_events: CrossoverEvent objects active at this frame.
+        """
         annotated = frame.copy()
         self._frame_counter += 1
 
@@ -96,12 +104,17 @@ class SkatingAnnotator:
         if self.show_skeleton:
             self._draw_skeleton(annotated, landmarks, joint_ratings, mechanic_results)
 
-        # Draw error highlights on problem joints
-        if mechanic_results:
+        # Crossover-specific annotations take priority over generic errors
+        if crossover_events:
+            self._draw_crossover_feedback(annotated, landmarks, crossover_events)
+        elif mechanic_results:
             self._draw_error_highlights(annotated, landmarks, mechanic_results)
 
-        if self.show_hud and mechanic_results:
-            self._draw_hud(annotated, mechanic_results)
+        if self.show_hud:
+            if crossover_events:
+                self._draw_crossover_hud(annotated, crossover_events)
+            elif mechanic_results:
+                self._draw_hud(annotated, mechanic_results)
 
         return annotated
 
@@ -311,3 +324,121 @@ class SkatingAnnotator:
                 (panel_x + panel_width - 55, y),
                 self.font, 0.35, color, 1,
             )
+
+    def _draw_crossover_feedback(
+        self,
+        frame: np.ndarray,
+        landmarks: dict,
+        events: list,
+    ):
+        """Draw crossover-specific visual feedback.
+
+        Highlights the crossing leg's knee (knee drive indicator) and
+        shows whether the crossover technique is correct.
+        """
+        h, w = frame.shape[:2]
+
+        for event in events:
+            color = COLORS.get(event.overall_rating, COLORS["skeleton"])
+
+            # Highlight the crossing leg's knee — this is where knee drive matters
+            knee_name = f"{event.crossing_leg}_knee"
+            ankle_name = f"{event.crossing_leg}_ankle"
+
+            if knee_name in landmarks and landmarks[knee_name]["visibility"] > 0.4:
+                knee_pt = (int(landmarks[knee_name]["x"]),
+                           int(landmarks[knee_name]["y"]))
+
+                if event.knee_drive_rating == "poor":
+                    # Big pulsing red ring on knee + "DRIVE KNEE" label
+                    pulse = int(10 + 8 * abs(np.sin(self._frame_counter * 0.2)))
+                    cv2.circle(frame, knee_pt, pulse + 18, COLORS["error_ring"], 3)
+                    cv2.circle(frame, knee_pt, pulse + 23, COLORS["error_glow"], 1)
+
+                    label = "DRIVE KNEE!"
+                    lpt = (knee_pt[0] + 30, knee_pt[1] - 10)
+                    tsz = cv2.getTextSize(label, self.font, 0.5, 2)[0]
+                    cv2.rectangle(frame, (lpt[0]-3, lpt[1]-tsz[1]-3),
+                                  (lpt[0]+tsz[0]+3, lpt[1]+5), COLORS["poor"], -1)
+                    cv2.putText(frame, label, lpt, self.font, 0.5, (255, 255, 255), 2)
+
+                elif event.knee_drive_rating == "warning":
+                    cv2.circle(frame, knee_pt, 22, COLORS["warning"], 2)
+                    label = "MORE KNEE DRIVE"
+                    lpt = (knee_pt[0] + 28, knee_pt[1] - 8)
+                    tsz = cv2.getTextSize(label, self.font, 0.4, 1)[0]
+                    cv2.rectangle(frame, (lpt[0]-2, lpt[1]-tsz[1]-2),
+                                  (lpt[0]+tsz[0]+2, lpt[1]+4), COLORS["warning"], -1)
+                    cv2.putText(frame, label, lpt, self.font, 0.4, (0, 0, 0), 1)
+
+                elif event.knee_drive_rating == "good":
+                    cv2.circle(frame, knee_pt, 20, COLORS["good"], 2)
+
+            # Draw arrow showing direction of crossover
+            if (ankle_name in landmarks
+                    and landmarks[ankle_name]["visibility"] > 0.4
+                    and knee_name in landmarks):
+                ankle_pt = (int(landmarks[ankle_name]["x"]),
+                            int(landmarks[ankle_name]["y"]))
+                # Arrow from ankle toward knee (showing the crossing direction)
+                cv2.arrowedLine(frame, ankle_pt, knee_pt, color, 2, tipLength=0.15)
+
+            # Rotation feedback on the ankle
+            if (ankle_name in landmarks
+                    and landmarks[ankle_name]["visibility"] > 0.4
+                    and event.rotation_rating == "poor"):
+                apt = (int(landmarks[ankle_name]["x"]),
+                       int(landmarks[ankle_name]["y"]))
+                cv2.circle(frame, apt, 15, COLORS["poor"], 2)
+                label = "ROTATE"
+                lpt = (apt[0] - 30, apt[1] + 25)
+                cv2.putText(frame, label, lpt, self.font, 0.35, COLORS["poor"], 1)
+
+        # Top banner showing crossover event
+        if events:
+            evt = events[0]
+            banner_color = COLORS.get(evt.overall_rating, COLORS["skeleton"])
+            banner_text = f"CROSSOVER: {evt.crossing_leg.upper()} over {evt.stance_leg.upper()}"
+            cv2.rectangle(frame, (0, 0), (w, 32), (0, 0, 0), -1)
+            cv2.putText(frame, banner_text, (10, 22), self.font, 0.6, banner_color, 2)
+
+    def _draw_crossover_hud(self, frame: np.ndarray, events: list):
+        """Draw a crossover-specific HUD panel."""
+        if not events:
+            return
+
+        evt = events[0]
+        h, w = frame.shape[:2]
+
+        metrics = [
+            ("Knee Drive", evt.knee_drive_rating),
+            ("Int. Rotation", evt.rotation_rating),
+            ("Step-Out", evt.step_out_rating),
+        ]
+
+        line_height = 24
+        panel_width = 220
+        panel_height = 30 + len(metrics) * line_height
+        panel_x = w - panel_width - 10
+        panel_y = 10
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y),
+                      (panel_x + panel_width, panel_y + panel_height),
+                      COLORS["text_bg"], -1)
+        cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+
+        cv2.putText(frame, "CROSSOVER",
+                    (panel_x + 10, panel_y + 18),
+                    self.font, 0.45, (200, 200, 200), 1)
+
+        for i, (name, rating) in enumerate(metrics):
+            y = panel_y + 38 + i * line_height
+            color = COLORS.get(rating, (150, 150, 150))
+
+            cv2.circle(frame, (panel_x + 12, y - 4), 4, color, -1)
+            cv2.putText(frame, name, (panel_x + 24, y),
+                        self.font, 0.38, (220, 220, 220), 1)
+            cv2.putText(frame, rating.upper(),
+                        (panel_x + panel_width - 65, y),
+                        self.font, 0.35, color, 1)

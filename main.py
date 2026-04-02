@@ -23,6 +23,7 @@ from src.smoothing import LandmarkSmoother
 from src.mechanics_engine import MechanicsEngine
 from src.annotator import SkatingAnnotator
 from src.stride_detector import StrideDetector
+from src.crossover_analyzer import CrossoverDetector
 from src.report_generator import ReportGenerator
 from src.video_preprocessing import SkaterCropper
 from src.utils import ensure_dir, format_timestamp
@@ -150,8 +151,9 @@ def main():
         print("Initializing auto-crop (YOLO person detection)...")
         cropper = SkaterCropper(target_height=args.crop_height)
 
-    # Stride detector collects angle data across all frames
+    # Stride and crossover detectors collect data across all frames
     stride_detector = StrideDetector()
+    crossover_detector = CrossoverDetector()
 
     # Process video
     # When auto-cropping, output dimensions are determined by the first crop.
@@ -171,68 +173,76 @@ def main():
     else:
         out_w, out_h = meta["width"], meta["height"]
 
+    # Pass 1: Pose estimation + data collection
+    frame_data = []  # Store (frame, landmarks, mechanic_results) per frame
+
+    if cropper is not None:
+        cropper.reset()
+
+    for frame_idx, frame in frame_generator(args.input):
+        if cropper is not None:
+            frame, crop_info = cropper.process_frame(frame)
+
+        landmarks = pose_estimator.process_frame(frame)
+
+        mechanic_results = None
+        angles = {}
+
+        if landmarks is not None:
+            frames_detected += 1
+
+            if smoother is not None:
+                landmarks = smoother.update(landmarks)
+
+            angles = compute_all_angles(landmarks)
+            mechanic_results = engine.evaluate(angles)
+
+        stride_detector.add_frame(angles)
+        crossover_detector.add_frame(landmarks)
+        frame_data.append((frame, landmarks, mechanic_results))
+        frames_processed += 1
+
+        if frames_processed % 100 == 0:
+            elapsed = time.time() - start_time
+            fps_actual = frames_processed / elapsed if elapsed > 0 else 0
+            pct = (
+                frames_processed / meta["frame_count"] * 100
+                if meta["frame_count"] > 0
+                else 0
+            )
+            timestamp = format_timestamp(frame_idx, meta["fps"])
+            print(
+                f"  [{timestamp}] {pct:.0f}% complete "
+                f"({fps_actual:.1f} fps processing)"
+            )
+
+    # Run temporal analysis before rendering
+    print("  Analyzing strides and crossovers...")
+    stride_analysis = stride_detector.analyze(fps=meta["fps"])
+    crossover_analysis = crossover_detector.analyze(fps=meta["fps"])
+
+    # Pass 2: Render annotated video with crossover-aware annotations
+    print("  Rendering annotated video...")
     with video_writer(
         args.output,
         fps=meta["fps"],
         width=out_w,
         height=out_h,
     ) as writer:
-        for frame_idx, frame in frame_generator(args.input):
-            # Auto-crop if enabled
-            if cropper is not None:
-                frame, crop_info = cropper.process_frame(frame)
+        for frame_idx, (frame, landmarks, mechanic_results) in enumerate(frame_data):
+            # Check if a crossover event is active at this frame
+            active_crossovers = crossover_analysis.events_at_frame(frame_idx)
 
-            # Pose estimation
-            landmarks = pose_estimator.process_frame(frame)
+            annotated = annotator.render(
+                frame, landmarks, mechanic_results,
+                crossover_events=active_crossovers if active_crossovers else None,
+            )
 
-            mechanic_results = None
-            angles = {}
-
-            if landmarks is not None:
-                frames_detected += 1
-
-                # Smooth keypoints
-                if smoother is not None:
-                    landmarks = smoother.update(landmarks)
-
-                # Calculate angles
-                angles = compute_all_angles(landmarks)
-
-                # Evaluate mechanics
-                mechanic_results = engine.evaluate(angles)
-
-            # Feed angles to stride detector (empty dict if no detection)
-            stride_detector.add_frame(angles)
-
-            # Annotate frame
-            annotated = annotator.render(frame, landmarks, mechanic_results)
-
-            # Ensure consistent output size (auto-crop may vary slightly)
             ah, aw = annotated.shape[:2]
             if aw != out_w or ah != out_h:
                 annotated = cv2.resize(annotated, (out_w, out_h))
 
-            # Write output
             writer.write(annotated)
-            frames_processed += 1
-
-            # Progress update every 100 frames
-            if frames_processed % 100 == 0:
-                elapsed = time.time() - start_time
-                fps_actual = frames_processed / elapsed if elapsed > 0 else 0
-                pct = (
-                    frames_processed / meta["frame_count"] * 100
-                    if meta["frame_count"] > 0
-                    else 0
-                )
-                timestamp = format_timestamp(frame_idx, meta["fps"])
-                print(
-                    f"  [{timestamp}] {pct:.0f}% complete "
-                    f"({fps_actual:.1f} fps processing)"
-                )
-
-    # Stride analysis
-    stride_analysis = stride_detector.analyze(fps=meta["fps"])
 
     # Summary
     elapsed = time.time() - start_time
@@ -297,6 +307,33 @@ def main():
                     print(f"      -> {metric_results[0].feedback}")
     else:
         print("  No strides detected (video may be too short or skater not visible)")
+
+    # Crossover report
+    if crossover_analysis.total_crossovers > 0:
+        print()
+        print("CROSSOVER ANALYSIS")
+        print(f"  Total crossovers: {crossover_analysis.total_crossovers} "
+              f"(L over R: {len(crossover_analysis.left_over_right)}, "
+              f"R over L: {len(crossover_analysis.right_over_left)})")
+
+        avg_kd = crossover_analysis.avg_knee_drive_score()
+        if avg_kd is not None:
+            kd_label = "GOOD" if avg_kd >= 0.4 else "WARNING" if avg_kd >= 0.15 else "POOR"
+            print(f"  Avg knee drive score: {avg_kd:.0%} ({kd_label})")
+
+        # Detail each crossover
+        for i, evt in enumerate(crossover_analysis.events):
+            t = evt.frame_idx / meta["fps"]
+            print(f"  Crossover #{i+1} at {t:.1f}s ({evt.crossing_leg} over {evt.stance_leg}):")
+            print(f"    Knee drive: {evt.knee_drive_rating.upper()}"
+                  f"  |  Rotation: {evt.rotation_rating.upper()}"
+                  f"  |  Step-out: {evt.step_out_rating.upper()}"
+                  f"  => {evt.overall_rating.upper()}")
+            for fb in evt.feedback:
+                if evt.overall_rating != "good":
+                    print(f"      -> {fb}")
+    else:
+        print("  No crossovers detected")
 
     # Generate reports
     report_gen = ReportGenerator()
