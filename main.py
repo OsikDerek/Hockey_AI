@@ -13,6 +13,7 @@ import os
 import sys
 import time
 
+import cv2
 import numpy as np
 
 from src.video_io import frame_generator, video_writer, get_video_metadata
@@ -23,6 +24,7 @@ from src.mechanics_engine import MechanicsEngine
 from src.annotator import SkatingAnnotator
 from src.stride_detector import StrideDetector
 from src.report_generator import ReportGenerator
+from src.video_preprocessing import SkaterCropper
 from src.utils import ensure_dir, format_timestamp
 
 
@@ -78,6 +80,17 @@ def parse_args():
         action="store_true",
         help="Only draw skeleton (no angles, no HUD)",
     )
+    parser.add_argument(
+        "--auto-crop",
+        action="store_true",
+        help="Auto-detect and crop to skater (use for distant/wide shots)",
+    )
+    parser.add_argument(
+        "--crop-height",
+        type=int,
+        default=720,
+        help="Target height for auto-crop upscale (default: 720)",
+    )
     return parser.parse_args()
 
 
@@ -131,22 +144,44 @@ def main():
         show_hud=show_hud,
     )
 
+    # Auto-crop preprocessor
+    cropper = None
+    if args.auto_crop:
+        print("Initializing auto-crop (YOLO person detection)...")
+        cropper = SkaterCropper(target_height=args.crop_height)
+
     # Stride detector collects angle data across all frames
     stride_detector = StrideDetector()
 
     # Process video
+    # When auto-cropping, output dimensions are determined by the first crop.
+    # We do a pre-scan of the first frame to get the output size.
     print("Processing video...")
     start_time = time.time()
     frames_processed = 0
     frames_detected = 0
 
+    if cropper is not None:
+        # Pre-scan first frame to determine output dimensions
+        for _, first_frame in frame_generator(args.input):
+            test_crop, _ = cropper.process_frame(first_frame)
+            out_h, out_w = test_crop.shape[:2]
+            cropper.reset()  # Reset so first frame is processed fresh
+            break
+    else:
+        out_w, out_h = meta["width"], meta["height"]
+
     with video_writer(
         args.output,
         fps=meta["fps"],
-        width=meta["width"],
-        height=meta["height"],
+        width=out_w,
+        height=out_h,
     ) as writer:
         for frame_idx, frame in frame_generator(args.input):
+            # Auto-crop if enabled
+            if cropper is not None:
+                frame, crop_info = cropper.process_frame(frame)
+
             # Pose estimation
             landmarks = pose_estimator.process_frame(frame)
 
@@ -171,6 +206,11 @@ def main():
 
             # Annotate frame
             annotated = annotator.render(frame, landmarks, mechanic_results)
+
+            # Ensure consistent output size (auto-crop may vary slightly)
+            ah, aw = annotated.shape[:2]
+            if aw != out_w or ah != out_h:
+                annotated = cv2.resize(annotated, (out_w, out_h))
 
             # Write output
             writer.write(annotated)
