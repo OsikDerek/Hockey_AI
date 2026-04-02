@@ -85,16 +85,18 @@ class SkatingAnnotator:
             )
             return annotated
 
-        # During crossover events: crossover-only annotations
-        if crossover_events:
+        # Crossover mode (crossover_events is a list, possibly empty)
+        if crossover_events is not None:
             if self.show_skeleton:
                 self._draw_skeleton_minimal(annotated, landmarks)
-            self._draw_crossover_feedback(annotated, landmarks, crossover_events)
-            if self.show_hud:
-                self._draw_crossover_hud(annotated, crossover_events)
+            if crossover_events:  # Non-empty = active crossover
+                self._draw_crossover_feedback(annotated, landmarks, crossover_events)
+                if self.show_hud:
+                    self._draw_crossover_hud(annotated, crossover_events)
+            # Empty list = crossover mode but between events — just minimal skeleton
             return annotated
 
-        # Normal mode: subtle skeleton + only highlight problems
+        # General mode: subtle skeleton + only highlight problems
         if self.show_skeleton:
             self._draw_skeleton_rated(annotated, landmarks, mechanic_results)
 

@@ -49,6 +49,12 @@ def parse_args():
         help="Path to skating mechanics YAML config",
     )
     parser.add_argument(
+        "--mode", "-m",
+        default="general",
+        choices=["general", "crossover"],
+        help="Analysis mode: general (stride + angles) or crossover (crossover technique only) (default: general)",
+    )
+    parser.add_argument(
         "--backend", "-b",
         default="mediapipe",
         choices=["mediapipe", "yolo"],
@@ -195,9 +201,13 @@ def main():
                 landmarks = smoother.update(landmarks)
 
             angles = compute_all_angles(landmarks)
-            mechanic_results = engine.evaluate(angles)
 
-        stride_detector.add_frame(angles)
+            # In crossover mode, skip generic mechanics evaluation
+            if args.mode == "general":
+                mechanic_results = engine.evaluate(angles)
+
+        if args.mode == "general":
+            stride_detector.add_frame(angles)
         crossover_detector.add_frame(landmarks)
         frame_data.append((frame, landmarks, mechanic_results))
         frames_processed += 1
@@ -217,8 +227,12 @@ def main():
             )
 
     # Run temporal analysis before rendering
-    print("  Analyzing strides and crossovers...")
-    stride_analysis = stride_detector.analyze(fps=meta["fps"])
+    if args.mode == "general":
+        print("  Analyzing strides and crossovers...")
+        stride_analysis = stride_detector.analyze(fps=meta["fps"])
+    else:
+        print("  Analyzing crossovers...")
+        stride_analysis = stride_detector.analyze(fps=meta["fps"])  # Still needed for report
     crossover_analysis = crossover_detector.analyze(fps=meta["fps"])
 
     # Pass 2: Render annotated video with crossover-aware annotations
@@ -230,13 +244,20 @@ def main():
         height=out_h,
     ) as writer:
         for frame_idx, (frame, landmarks, mechanic_results) in enumerate(frame_data):
-            # Check if a crossover event is active at this frame
             active_crossovers = crossover_analysis.events_at_frame(frame_idx)
 
-            annotated = annotator.render(
-                frame, landmarks, mechanic_results,
-                crossover_events=active_crossovers if active_crossovers else None,
-            )
+            if args.mode == "crossover":
+                # Crossover mode: only show crossover feedback, nothing else
+                annotated = annotator.render(
+                    frame, landmarks, None,
+                    crossover_events=active_crossovers if active_crossovers else [],
+                )
+            else:
+                # General mode: show generic mechanics, crossover overrides when active
+                annotated = annotator.render(
+                    frame, landmarks, mechanic_results,
+                    crossover_events=active_crossovers if active_crossovers else None,
+                )
 
             ah, aw = annotated.shape[:2]
             if aw != out_w or ah != out_h:
