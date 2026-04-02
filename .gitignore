@@ -1,0 +1,29 @@
+# Video data (too large for git)
+data/raw_videos/
+data/processed_frames/
+
+# Model weights
+models/*.task
+models/*.pt
+*.pt
+
+# Output
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
