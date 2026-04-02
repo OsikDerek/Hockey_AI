@@ -13,12 +13,15 @@ import os
 import sys
 import time
 
+import numpy as np
+
 from src.video_io import frame_generator, video_writer, get_video_metadata
 from src.pose_estimator import create_estimator
 from src.angle_calculator import compute_all_angles
 from src.smoothing import LandmarkSmoother
 from src.mechanics_engine import MechanicsEngine
 from src.annotator import SkatingAnnotator
+from src.stride_detector import StrideDetector
 from src.utils import ensure_dir, format_timestamp
 
 
@@ -127,6 +130,9 @@ def main():
         show_hud=show_hud,
     )
 
+    # Stride detector collects angle data across all frames
+    stride_detector = StrideDetector()
+
     # Process video
     print("Processing video...")
     start_time = time.time()
@@ -144,6 +150,7 @@ def main():
             landmarks = pose_estimator.process_frame(frame)
 
             mechanic_results = None
+            angles = {}
 
             if landmarks is not None:
                 frames_detected += 1
@@ -157,6 +164,9 @@ def main():
 
                 # Evaluate mechanics
                 mechanic_results = engine.evaluate(angles)
+
+            # Feed angles to stride detector (empty dict if no detection)
+            stride_detector.add_frame(angles)
 
             # Annotate frame
             annotated = annotator.render(frame, landmarks, mechanic_results)
@@ -180,6 +190,9 @@ def main():
                     f"({fps_actual:.1f} fps processing)"
                 )
 
+    # Stride analysis
+    stride_analysis = stride_detector.analyze(fps=meta["fps"])
+
     # Summary
     elapsed = time.time() - start_time
     fps_actual = frames_processed / elapsed if elapsed > 0 else 0
@@ -194,6 +207,56 @@ def main():
     print(f"  Processing speed: {fps_actual:.1f} fps")
     print(f"  Skater detected in {frames_detected}/{frames_processed} frames ({detection_rate:.0f}%)")
     print(f"  Output saved to: {args.output}")
+
+    # Stride report
+    if stride_analysis.total_strides > 0:
+        print()
+        print("STRIDE ANALYSIS")
+        print(f"  Total strides: {stride_analysis.total_strides} "
+              f"(L: {len(stride_analysis.left_strides)}, "
+              f"R: {len(stride_analysis.right_strides)})")
+        if stride_analysis.avg_stride_duration_sec is not None:
+            print(f"  Avg stride duration: {stride_analysis.avg_stride_duration_sec:.2f}s")
+
+        # Stride-level evaluation using mechanics engine
+        session_results = engine.evaluate_session(stride_analysis)
+
+        sym_results = [r for r in session_results if r.name == "symmetry"]
+        if sym_results:
+            s = sym_results[0]
+            print(f"  L/R symmetry: {s.value:.0%} ({s.rating.upper()})")
+
+        for side_name, strides in [("Left", stride_analysis.left_strides),
+                                    ("Right", stride_analysis.right_strides)]:
+            if not strides:
+                continue
+            side_key = side_name.lower()
+            print(f"  {side_name} leg:")
+
+            side_results = [r for r in session_results if r.side == side_key]
+            metrics = {}
+            for r in side_results:
+                metrics.setdefault(r.name, []).append(r)
+
+            for metric_name, metric_results in metrics.items():
+                values = [r.value for r in metric_results]
+                avg_val = np.mean(values)
+                ratings = [r.rating for r in metric_results]
+                poor_pct = ratings.count("poor") / len(ratings) * 100
+                warn_pct = ratings.count("warning") / len(ratings) * 100
+                display = metric_results[0].display_name.rsplit(" (", 1)[0]
+
+                status = "GOOD"
+                if poor_pct > 30:
+                    status = "POOR"
+                elif warn_pct + poor_pct > 40:
+                    status = "WARNING"
+
+                print(f"    {display}: {avg_val:.0f} avg ({status})")
+                if status != "GOOD":
+                    print(f"      -> {metric_results[0].feedback}")
+    else:
+        print("  No strides detected (video may be too short or skater not visible)")
 
     pose_estimator.close()
 

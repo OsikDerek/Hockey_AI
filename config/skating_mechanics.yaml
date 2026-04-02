@@ -56,6 +56,44 @@ mechanics:
       warning: "Slight lateral lean — check balance"
       poor: "Significant balance issue — center of gravity off"
 
+# Stride-level mechanics (evaluated per stride cycle, not per frame)
+stride_mechanics:
+  push_off_extension:
+    display_name: "Push-off Extension"
+    good_range: [155, 180]
+    warning_range: [140, 180]
+    feedback:
+      good: "Full leg extension — maximizing push-off power"
+      warning: "Incomplete extension — leaving power on the table"
+      poor: "Very short push-off — significant power loss"
+
+  glide_knee_bend:
+    display_name: "Glide Knee Bend"
+    good_range: [90, 130]
+    warning_range: [80, 150]
+    feedback:
+      good: "Deep knee bend in glide — good power position"
+      warning: "Standing too tall in glide — losing edge pressure"
+      poor: "Legs nearly straight — no power loaded for next stride"
+
+  stride_range_of_motion:
+    display_name: "Stride ROM"
+    good_range: [30, 80]
+    warning_range: [20, 95]
+    feedback:
+      good: "Good range of motion through the stride"
+      warning: "Limited stride ROM — could generate more power"
+      poor: "Very restricted ROM — check flexibility and technique"
+
+  symmetry:
+    display_name: "L/R Symmetry"
+    good_range: [0.90, 1.0]
+    warning_range: [0.80, 1.0]
+    feedback:
+      good: "Balanced stride between both legs"
+      warning: "Slight imbalance — one side weaker"
+      poor: "Significant asymmetry — risk of compensation injuries"
+
 # Visibility threshold for landmark confidence
 min_visibility: 0.5
 
