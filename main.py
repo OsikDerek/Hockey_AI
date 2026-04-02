@@ -22,6 +22,7 @@ from src.smoothing import LandmarkSmoother
 from src.mechanics_engine import MechanicsEngine
 from src.annotator import SkatingAnnotator
 from src.stride_detector import StrideDetector
+from src.report_generator import ReportGenerator
 from src.utils import ensure_dir, format_timestamp
 
 
@@ -209,7 +210,9 @@ def main():
     print(f"  Output saved to: {args.output}")
 
     # Stride report
+    session_results = []
     if stride_analysis.total_strides > 0:
+        session_results = engine.evaluate_session(stride_analysis)
         print()
         print("STRIDE ANALYSIS")
         print(f"  Total strides: {stride_analysis.total_strides} "
@@ -217,9 +220,6 @@ def main():
               f"R: {len(stride_analysis.right_strides)})")
         if stride_analysis.avg_stride_duration_sec is not None:
             print(f"  Avg stride duration: {stride_analysis.avg_stride_duration_sec:.2f}s")
-
-        # Stride-level evaluation using mechanics engine
-        session_results = engine.evaluate_session(stride_analysis)
 
         sym_results = [r for r in session_results if r.name == "symmetry"]
         if sym_results:
@@ -257,6 +257,34 @@ def main():
                     print(f"      -> {metric_results[0].feedback}")
     else:
         print("  No strides detected (video may be too short or skater not visible)")
+
+    # Generate reports
+    report_gen = ReportGenerator()
+    report_base = os.path.splitext(args.output)[0]
+
+    text_report = report_gen.generate(
+        video_path=args.input,
+        video_meta=meta,
+        frames_processed=frames_processed,
+        frames_detected=frames_detected,
+        stride_analysis=stride_analysis,
+        session_results=session_results,
+        output_path=f"{report_base}_report.txt",
+    )
+
+    report_gen.generate_json(
+        video_path=args.input,
+        video_meta=meta,
+        frames_processed=frames_processed,
+        frames_detected=frames_detected,
+        stride_analysis=stride_analysis,
+        session_results=session_results,
+        output_path=f"{report_base}_report.json",
+    )
+
+    print(f"\n  Reports saved to:")
+    print(f"    {report_base}_report.txt")
+    print(f"    {report_base}_report.json")
 
     pose_estimator.close()
 

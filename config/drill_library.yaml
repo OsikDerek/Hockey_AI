@@ -1,0 +1,115 @@
+# Drill Recommendations Library
+# ==============================
+# Maps mechanic deficiencies to specific drills and coaching cues.
+# Derek: populate/adjust these based on your coaching expertise.
+#
+# Each entry matches a mechanic name from skating_mechanics.yaml
+# and provides drills for 'warning' and 'poor' ratings.
+
+drills:
+  # --- Per-frame mechanics ---
+  knee_angle:
+    warning:
+      - name: "Wall Sits"
+        description: "Hold wall sit position with stick for 30s, focusing on 90° knee bend"
+        cue: "Butt down, chest up — you should not see your toes past your knees"
+      - name: "Stride Holds"
+        description: "Glide on one foot holding deep knee bend for 3 seconds between strides"
+        cue: "Sit into each stride — feel the burn in your quads"
+    poor:
+      - name: "Stationary Knee Bend Drill"
+        description: "On ice, practice dropping into hockey stance and holding. Partner checks knee angle."
+        cue: "Pretend you're sitting in a chair — get LOW"
+      - name: "Off-Ice Goblet Squats"
+        description: "3x12 goblet squats focusing on depth and control"
+        cue: "Below parallel every rep — build the muscle memory for deep knee bend"
+
+  hip_angle:
+    warning:
+      - name: "Hip Hinge Walk"
+        description: "Walk the length of the ice maintaining forward lean from the hips"
+        cue: "Hinge at the hips, not the waist — chest points at the ice 10 feet ahead"
+    poor:
+      - name: "Romanian Deadlifts (Off-Ice)"
+        description: "3x10 RDLs — builds hip hinge pattern and hamstring strength"
+        cue: "Push your butt back like closing a car door with your hips"
+      - name: "Partner Hip Check"
+        description: "Skate while partner periodically pushes on your upper back — maintain hip position"
+        cue: "If you stand up when pushed, your hips are too high"
+
+  forward_lean:
+    warning:
+      - name: "Stick on Back Drill"
+        description: "Skate with stick placed along spine — maintain contact at head, upper back, and tailbone"
+        cue: "Lean from the ankles, not the waist"
+    poor:
+      - name: "Two-Line Forward Lean Sprint"
+        description: "Sprint goal line to blue line focusing only on maintaining forward lean"
+        cue: "Nose over toes — if you're upright you're losing speed"
+
+  ankle_dorsiflexion:
+    warning:
+      - name: "Edge Glides"
+        description: "Glide on inside then outside edges, focusing on ankle pressure into the boot"
+        cue: "Push your shin into the tongue of the boot"
+    poor:
+      - name: "Ankle Mobility Band Work (Off-Ice)"
+        description: "Banded ankle dorsiflexion stretches, 2x20 each side"
+        cue: "If your ankles are stiff, your edges will always be weak"
+      - name: "Single-Foot Sculling"
+        description: "Scull forward on one foot, pressing into inside edge"
+        cue: "Feel the blade bite — ankle drives the edge"
+
+  trunk_alignment:
+    warning:
+      - name: "Hands on Hips Skating"
+        description: "Skate with hands on hips — forces awareness of trunk position"
+        cue: "Shoulders level, belt buckle pointing straight ahead"
+    poor:
+      - name: "Balance Board (Off-Ice)"
+        description: "Single-leg balance board holds, 3x30s each side"
+        cue: "If you lean in games, you lean in practice — fix it here"
+
+  # --- Stride-level mechanics ---
+  push_off_extension:
+    warning:
+      - name: "Full Extension Strides"
+        description: "Skate end to end focusing on fully locking out the push leg before recovery"
+        cue: "Snap the leg straight on every push — toe should flick at the end"
+    poor:
+      - name: "Overspeed Bands"
+        description: "Partner pulls you with a band — forces longer, more explosive extension"
+        cue: "Reach back further with each stride — the band does the work, you do the push"
+
+  glide_knee_bend:
+    warning:
+      - name: "Glide Holds"
+        description: "Alternate 3 hard strides then 3-second one-foot glide in deep position"
+        cue: "When you glide, drop your hips — load the spring for the next push"
+    poor:
+      - name: "Pause Skating"
+        description: "Stride, then freeze in glide position for 2 seconds. Coach checks position."
+        cue: "If you can't hold the position, you're not strong enough to skate from it"
+
+  stride_range_of_motion:
+    warning:
+      - name: "Long Stride Drill"
+        description: "Skate at 70% speed focusing on making each stride as long as possible"
+        cue: "Cover more ice with fewer strides — quality over quantity"
+    poor:
+      - name: "Hip Flexor Stretching (Off-Ice)"
+        description: "Daily hip flexor stretches — tight hip flexors kill stride length"
+        cue: "If you can't extend, it's probably flexibility, not technique"
+      - name: "Monster Walks with Band"
+        description: "Lateral band walks to open up hip ROM"
+        cue: "Wide steps, stay low — build range and strength together"
+
+  symmetry:
+    warning:
+      - name: "Weak-Side Focus"
+        description: "Skate a full practice leading with your weak side on all turns and crossovers"
+        cue: "Your weak side needs double the reps until it catches up"
+    poor:
+      - name: "Single-Leg Skating Assessment"
+        description: "Skate one full lap on each leg only — compare distance and stability"
+        cue: "Film both sides and compare — you'll see the difference"
