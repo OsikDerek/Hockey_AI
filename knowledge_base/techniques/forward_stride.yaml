@@ -1,0 +1,256 @@
+# Forward Stride Technique — Coaching Knowledge Base
+# ===================================================
+# General forward skating mechanics evaluated per-frame and per-stride.
+# All angles in degrees unless noted otherwise.
+
+technique:
+  name: forward_stride
+  display_name: "Forward Stride"
+  description: "General forward skating mechanics — posture, knee bend, hip hinge, and stride efficiency"
+
+  # Detection: FrameByFrame evaluates every frame against angle thresholds
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both    # both, left, or right
+
+  # Per-frame checks — evaluated on every frame using angle_calculator
+  checks:
+    knee_angle:
+      display_name: "Knee Bend"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      good_range: [95, 125]
+      warning_range: [80, 140]
+      feedback:
+        good: "Strong knee bend -- good power position"
+        warning: "Knee bend could be deeper for more power"
+        poor: "Insufficient knee bend -- losing stride power"
+      drills:
+        warning:
+          - name: "Wall Sits"
+            description: "Hold wall sit position with stick for 30s, focusing on 90 degree knee bend"
+            cue: "Butt down, chest up -- you should not see your toes past your knees"
+          - name: "Stride Holds"
+            description: "Glide on one foot holding deep knee bend for 3 seconds between strides"
+            cue: "Sit into each stride -- feel the burn in your quads"
+        poor:
+          - name: "Stationary Knee Bend Drill"
+            description: "On ice, practice dropping into hockey stance and holding. Partner checks knee angle."
+            cue: "Pretend you are sitting in a chair -- get LOW"
+          - name: "Off-Ice Goblet Squats"
+            description: "3x12 goblet squats focusing on depth and control"
+            cue: "Below parallel every rep -- build the muscle memory for deep knee bend"
+      annotation:
+        joint: "{side}_knee"
+        segments:
+          - ["{side}_hip", "{side}_knee"]
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "KNEE"
+
+    hip_angle:
+      display_name: "Hip Hinge"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [70, 110]
+      warning_range: [55, 130]
+      feedback:
+        good: "Good hip position"
+        warning: "Adjust hip hinge depth"
+        poor: "Hip position compromising stride efficiency"
+      drills:
+        warning:
+          - name: "Hip Hinge Walk"
+            description: "Walk the length of the ice maintaining forward lean from the hips"
+            cue: "Hinge at the hips, not the waist -- chest points at the ice 10 feet ahead"
+        poor:
+          - name: "Romanian Deadlifts (Off-Ice)"
+            description: "3x10 RDLs -- builds hip hinge pattern and hamstring strength"
+            cue: "Push your butt back like closing a car door with your hips"
+          - name: "Partner Hip Check"
+            description: "Skate while partner periodically pushes on your upper back -- maintain hip position"
+            cue: "If you stand up when pushed, your hips are too high"
+      annotation:
+        joint: "{side}_hip"
+        segments:
+          - ["{side}_shoulder", "{side}_hip"]
+          - ["{side}_hip", "{side}_knee"]
+        short_label: "HIP"
+
+    forward_lean:
+      display_name: "Forward Lean"
+      type: angle
+      angle_function: forward_lean_angle
+      per_side: false
+      good_range: [30, 50]
+      warning_range: [20, 60]
+      feedback:
+        good: "Good forward lean -- efficient posture"
+        warning: "Adjust torso angle for better balance"
+        poor: "Too upright -- losing speed and edge pressure"
+      drills:
+        warning:
+          - name: "Stick on Back Drill"
+            description: "Skate with stick placed along spine -- maintain contact at head, upper back, and tailbone"
+            cue: "Lean from the ankles, not the waist"
+        poor:
+          - name: "Two-Line Forward Lean Sprint"
+            description: "Sprint goal line to blue line focusing only on maintaining forward lean"
+            cue: "Nose over toes -- if you are upright you are losing speed"
+      annotation:
+        joint: "left_shoulder"
+        segments:
+          - ["left_shoulder", "left_hip"]
+          - ["right_shoulder", "right_hip"]
+        short_label: "LEAN"
+
+    ankle_dorsiflexion:
+      display_name: "Ankle Flex"
+      type: angle
+      angle_function: ankle_dorsiflexion
+      per_side: true
+      good_range: [70, 95]
+      warning_range: [60, 110]
+      feedback:
+        good: "Good ankle engagement on edges"
+        warning: "More ankle flex needed for edge control"
+        poor: "Ankles too stiff -- poor edge engagement"
+      drills:
+        warning:
+          - name: "Edge Glides"
+            description: "Glide on inside then outside edges, focusing on ankle pressure into the boot"
+            cue: "Push your shin into the tongue of the boot"
+        poor:
+          - name: "Ankle Mobility Band Work (Off-Ice)"
+            description: "Banded ankle dorsiflexion stretches, 2x20 each side"
+            cue: "If your ankles are stiff, your edges will always be weak"
+          - name: "Single-Foot Sculling"
+            description: "Scull forward on one foot, pressing into inside edge"
+            cue: "Feel the blade bite -- ankle drives the edge"
+      annotation:
+        joint: "{side}_ankle"
+        segments:
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "ANKLE"
+
+    trunk_alignment:
+      display_name: "Trunk Balance"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      good_range: [-8, 8]
+      warning_range: [-15, 15]
+      feedback:
+        good: "Balanced posture"
+        warning: "Slight lateral lean -- check balance"
+        poor: "Significant balance issue -- center of gravity off"
+      drills:
+        warning:
+          - name: "Hands on Hips Skating"
+            description: "Skate with hands on hips -- forces awareness of trunk position"
+            cue: "Shoulders level, belt buckle pointing straight ahead"
+        poor:
+          - name: "Balance Board (Off-Ice)"
+            description: "Single-leg balance board holds, 3x30s each side"
+            cue: "If you lean in games, you lean in practice -- fix it here"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "BALANCE"
+
+  # Stride-level checks — evaluated per complete stride cycle
+  stride_checks:
+    push_off_extension:
+      display_name: "Push-off Extension"
+      stride_field: push_off_angle
+      good_range: [155, 180]
+      warning_range: [140, 180]
+      feedback:
+        good: "Full leg extension -- maximizing push-off power"
+        warning: "Incomplete extension -- leaving power on the table"
+        poor: "Very short push-off -- significant power loss"
+      drills:
+        warning:
+          - name: "Full Extension Strides"
+            description: "Skate end to end focusing on fully locking out the push leg before recovery"
+            cue: "Snap the leg straight on every push -- toe should flick at the end"
+        poor:
+          - name: "Overspeed Bands"
+            description: "Partner pulls you with a band -- forces longer, more explosive extension"
+            cue: "Reach back further with each stride -- the band does the work, you do the push"
+
+    glide_knee_bend:
+      display_name: "Glide Knee Bend"
+      stride_field: glide_angle
+      good_range: [90, 130]
+      warning_range: [80, 150]
+      feedback:
+        good: "Deep knee bend in glide -- good power position"
+        warning: "Standing too tall in glide -- losing edge pressure"
+        poor: "Legs nearly straight -- no power loaded for next stride"
+      drills:
+        warning:
+          - name: "Glide Holds"
+            description: "Alternate 3 hard strides then 3-second one-foot glide in deep position"
+            cue: "When you glide, drop your hips -- load the spring for the next push"
+        poor:
+          - name: "Pause Skating"
+            description: "Stride, then freeze in glide position for 2 seconds. Coach checks position."
+            cue: "If you cannot hold the position, you are not strong enough to skate from it"
+
+    stride_range_of_motion:
+      display_name: "Stride ROM"
+      stride_field: extension_range
+      good_range: [30, 80]
+      warning_range: [20, 95]
+      feedback:
+        good: "Good range of motion through the stride"
+        warning: "Limited stride ROM -- could generate more power"
+        poor: "Very restricted ROM -- check flexibility and technique"
+      drills:
+        warning:
+          - name: "Long Stride Drill"
+            description: "Skate at 70% speed focusing on making each stride as long as possible"
+            cue: "Cover more ice with fewer strides -- quality over quantity"
+        poor:
+          - name: "Hip Flexor Stretching (Off-Ice)"
+            description: "Daily hip flexor stretches -- tight hip flexors kill stride length"
+            cue: "If you cannot extend, it is probably flexibility, not technique"
+          - name: "Monster Walks with Band"
+            description: "Lateral band walks to open up hip ROM"
+            cue: "Wide steps, stay low -- build range and strength together"
+
+    symmetry:
+      display_name: "L/R Symmetry"
+      stride_field: symmetry_ratio
+      session_level: true
+      good_range: [0.90, 1.0]
+      warning_range: [0.80, 1.0]
+      feedback:
+        good: "Balanced stride between both legs"
+        warning: "Slight imbalance -- one side weaker"
+        poor: "Significant asymmetry -- risk of compensation injuries"
+      drills:
+        warning:
+          - name: "Weak-Side Focus"
+            description: "Skate a full practice leading with your weak side on all turns and crossovers"
+            cue: "Your weak side needs double the reps until it catches up"
+        poor:
+          - name: "Single-Leg Skating Assessment"
+            description: "Skate one full lap on each leg only -- compare distance and stability"
+            cue: "Film both sides and compare -- you will see the difference"
+
+  # Coaching notes
+  coaching_notes:
+    - "Start in hockey position: feet shoulder width, knees bent, weight on balls of feet"
+    - "Arms move side to side, NOT swinging across the body"
+    - "Push the stride out the corner of your stance at a 45-degree angle"
+    - "Keep a tight base for a long efficient stride"
+    - "Reduce head bobbing -- keep head level"
+    - "Snap the toe at full extension, recover skate low and quick under the body"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both

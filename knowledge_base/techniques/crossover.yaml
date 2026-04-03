@@ -1,0 +1,130 @@
+# Crossover Technique — Coaching Knowledge Base
+# ==============================================
+# Expert knowledge from Coach Derek Osik (Pro Hockey Player / Skating Coach)
+#
+# This file is the SINGLE source of truth for crossover technique evaluation.
+# Edit thresholds, feedback, and drills here — no code changes needed.
+
+technique:
+  name: crossover
+  display_name: "Crossover"
+  description: "One leg crosses over the other to generate power through turns"
+
+  # Detection: which Python detector class finds crossover events
+  detection:
+    detector: CrossoverDetector
+    params:
+      min_crossing_distance: 5.0
+      pre_window: 10
+      post_window: 10
+      smoothing_window: 5
+      dedup_min_frames: 5
+
+  # Technique checks — evaluated on each detected crossover event
+  checks:
+    knee_drive:
+      display_name: "Knee Drive"
+      description: "Knee and toe should lead the crossover — knee moves past stance knee BEFORE foot crosses"
+      metric: knee_drive_score
+      good_range: [0.4, 1.0]
+      warning_range: [0.15, 1.0]
+      feedback:
+        good: "Good knee drive -- knee leading the crossover"
+        warning: "Knee drive could be more aggressive -- lead with the knee"
+        poor: "Foot is leading the crossover -- drive the KNEE first"
+      drills:
+        warning:
+          - name: "Knee-Lead Crossover Walk"
+            description: "Walk through crossovers slowly, exaggerating knee driving over first"
+            cue: "Knee first, foot second"
+        poor:
+          - name: "Standing Crossover Drill"
+            description: "Stationary. Lift knee up and over without moving foot until knee is past."
+            cue: "Freeze when your knee is over -- THEN step"
+          - name: "Knee-Lead Crossover Walk"
+            description: "Walk through crossovers slowly, exaggerating knee driving over first"
+            cue: "Knee first, foot second -- if your foot beats your knee, slow down"
+      annotation:
+        target_landmark: "{crossing_leg}_knee"
+        poor:
+          style: pulsing_ring
+          label: "DRIVE KNEE!"
+        warning:
+          style: ring
+          label: "MORE KNEE DRIVE"
+        good:
+          style: ring
+
+    internal_rotation:
+      display_name: "Internal Rotation"
+      description: "The crossing leg internally rotates slightly BEFORE the foot crosses over the other foot"
+      metric: rotation_change
+      good_range: [0.15, 10.0]
+      warning_range: [0.05, 10.0]
+      feedback:
+        good: "Good internal rotation before crossover"
+        warning: "Slight rotation detected -- more internal rotation before crossing"
+        poor: "No internal rotation before crossover -- rotate the leg inward first"
+      drills:
+        warning:
+          - name: "Internal Rotation Holds"
+            description: "Stand on one leg, rotate the free leg inward from the hip. Hold 3 seconds. Repeat 10x each side."
+            cue: "Turn the toe in -- feel it in your hip, not your knee"
+        poor:
+          - name: "Internal Rotation Holds"
+            description: "Stand on one leg, rotate the free leg inward from the hip. Hold 3 seconds. Repeat 10x each side."
+            cue: "Turn the toe in -- feel it in your hip, not your knee"
+          - name: "Slow Crossover with Rotation Focus"
+            description: "Do crossovers at walking speed. Before each step-over, consciously rotate the leg inward."
+            cue: "Rotate THEN step -- make it two separate moves until it becomes one"
+      annotation:
+        target_landmark: "{crossing_leg}_ankle"
+        poor:
+          style: ring
+          label: "ROTATE"
+        warning:
+          style: ring
+          label: "ROTATE"
+
+    step_out:
+      display_name: "Step-Out"
+      description: "After crossing over, the step-out should be explosive -- this is where power comes from"
+      metric: step_out_speed
+      good_range: [8.0, 1000.0]
+      warning_range: [4.0, 1000.0]
+      feedback:
+        good: "Explosive step-out -- good power"
+        warning: "Step-out could be more explosive"
+        poor: "Weak step-out -- explode out of the crossover"
+      drills:
+        warning:
+          - name: "Crossover Step-Out Sprints"
+            description: "Do a crossover, then sprint 3 strides out of it at max effort"
+            cue: "The crossover is the loaded spring -- the step-out is the explosion"
+        poor:
+          - name: "Crossover Step-Out Sprints"
+            description: "Do a crossover, then sprint 3 strides out of it at max effort"
+            cue: "The crossover is the loaded spring -- the step-out is the explosion"
+          - name: "Band-Resisted Crossover Push"
+            description: "Partner holds resistance band. Do crossover and push against the band on step-out."
+            cue: "Load and EXPLODE -- the band teaches you what power should feel like"
+      annotation:
+        target_landmark: "{stance_leg}_knee"
+        poor:
+          style: ring
+          label: "PUSH OUT!"
+        warning:
+          style: ring
+          label: "MORE PUSH"
+
+  # Coaching notes — non-computable knowledge for reports
+  coaching_notes:
+    - "Crossover should happen BEFORE the blue-line; the step-out is what steps/jumps over the blue-line"
+    - "When crossing over: knee and toe LEAD the crossover (this is called 'knee drive')"
+    - "The leg (including foot) internally rotates slightly BEFORE the foot actually crosses over"
+    - "Look for hips opening up into the turn"
+    - "Common beginner mistake: stepping wide instead of crossing over"
+
+  # Visual annotation config
+  annotation:
+    banner_template: "CROSSOVER: {crossing_leg} over {stance_leg}"

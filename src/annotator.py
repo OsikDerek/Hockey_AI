@@ -61,10 +61,12 @@ class SkatingAnnotator:
         show_skeleton: bool = True,
         show_angles: bool = True,
         show_hud: bool = True,
+        technique_engine=None,
     ):
         self.show_skeleton = show_skeleton
         self.show_angles = show_angles
         self.show_hud = show_hud
+        self.technique_engine = technique_engine
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self._frame_counter = 0
 
@@ -397,3 +399,187 @@ class SkatingAnnotator:
             cv2.putText(frame, rating.upper(),
                         (panel_x + panel_width - 60, y),
                         self.font, 0.3, color, 1, cv2.LINE_AA)
+
+    # ------------------------------------------------------------------
+    # Technique-based rendering (new knowledge base system)
+    # ------------------------------------------------------------------
+
+    def render_technique(
+        self,
+        frame: np.ndarray,
+        landmarks: Optional[dict],
+        event=None,
+        events=None,
+    ) -> np.ndarray:
+        """Render using technique engine's config-driven annotations.
+
+        For frame-by-frame techniques: pass event (single TechniqueEvent or None).
+        For temporal techniques: pass events (list of TechniqueEvent or None).
+        """
+        annotated = frame.copy()
+        self._frame_counter += 1
+
+        if landmarks is None:
+            cv2.putText(
+                annotated, "No skater detected",
+                (20, 40), self.font, 0.7, (0, 0, 200), 1, cv2.LINE_AA,
+            )
+            return annotated
+
+        # Temporal technique (crossover, shot, etc.)
+        if events is not None:
+            if self.show_skeleton:
+                self._draw_skeleton_minimal(annotated, landmarks)
+            if events:
+                self._draw_technique_events(annotated, landmarks, events)
+                if self.show_hud:
+                    self._draw_technique_hud(annotated, events)
+            return annotated
+
+        # Frame-by-frame technique
+        if event is not None:
+            self._draw_technique_frame(annotated, landmarks, event)
+        else:
+            if self.show_skeleton:
+                self._draw_skeleton_minimal(annotated, landmarks)
+
+        return annotated
+
+    def _draw_technique_events(self, frame: np.ndarray, landmarks: dict, events: list):
+        """Draw annotations for temporal technique events using YAML config."""
+        h, w = frame.shape[:2]
+
+        for event in events:
+            context = event.context
+
+            for result in event.check_results:
+                if result.rating == "good":
+                    continue
+
+                # Get annotation config from technique engine
+                ann_config = None
+                if self.technique_engine:
+                    ann_config = self.technique_engine.get_check_annotation(result.check_name)
+
+                if ann_config and result.rating in ann_config:
+                    rating_config = ann_config[result.rating]
+                    # Resolve landmark template
+                    target_template = ann_config.get("target_landmark", "")
+                    try:
+                        target_lm = target_template.format(**context)
+                    except (KeyError, IndexError):
+                        continue
+
+                    if target_lm not in landmarks or landmarks[target_lm]["visibility"] < 0.4:
+                        continue
+
+                    pt = (int(landmarks[target_lm]["x"]), int(landmarks[target_lm]["y"]))
+                    color = COLORS.get(result.rating, COLORS["skeleton"])
+                    style = rating_config.get("style", "ring")
+                    label = rating_config.get("label", "")
+
+                    if style == "pulsing_ring":
+                        pulse = int(8 + 5 * abs(np.sin(self._frame_counter * 0.2)))
+                        cv2.circle(frame, pt, pulse + 14, color, 2, cv2.LINE_AA)
+                    else:
+                        cv2.circle(frame, pt, 14, color, 2, cv2.LINE_AA)
+
+                    if label:
+                        lpt = (pt[0] + 20, pt[1] - 6)
+                        tsz = cv2.getTextSize(label, self.font, 0.4, 1)[0]
+                        cv2.rectangle(frame, (lpt[0]-2, lpt[1]-tsz[1]-3),
+                                      (lpt[0]+tsz[0]+2, lpt[1]+4),
+                                      COLORS["text_bg"], -1)
+                        cv2.putText(frame, label, lpt, self.font, 0.4,
+                                    color, 1, cv2.LINE_AA)
+
+            # Banner
+            if self.technique_engine:
+                banner_template = self.technique_engine.get_banner_template()
+                if banner_template:
+                    try:
+                        banner_text = banner_template.format(**context).upper()
+                    except (KeyError, IndexError):
+                        banner_text = event.overall_rating.upper()
+
+                    banner_color = COLORS.get(event.overall_rating, COLORS["skeleton"])
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (0, 0), (w, 28), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                    cv2.putText(frame, banner_text, (10, 20),
+                                self.font, 0.5, banner_color, 1, cv2.LINE_AA)
+
+    def _draw_technique_hud(self, frame: np.ndarray, events: list):
+        """HUD for technique events — only shows non-good checks."""
+        if not events:
+            return
+
+        evt = events[0]
+        h, w = frame.shape[:2]
+
+        issues = [(r.display_name, r.rating) for r in evt.check_results
+                  if r.rating not in ("good", "unknown")]
+
+        if not issues:
+            cv2.putText(frame, "GOOD", (w - 55, 22),
+                        self.font, 0.45, COLORS["good"], 1, cv2.LINE_AA)
+            return
+
+        line_height = 20
+        panel_width = 180
+        panel_height = 22 + len(issues) * line_height
+        panel_x = w - panel_width - 8
+        panel_y = 32
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (panel_x, panel_y),
+                      (panel_x + panel_width, panel_y + panel_height),
+                      COLORS["text_bg"], -1)
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+        for i, (name, rating) in enumerate(issues):
+            y = panel_y + 16 + i * line_height
+            color = COLORS.get(rating, (150, 150, 150))
+            cv2.circle(frame, (panel_x + 10, y - 3), 3, color, -1)
+            cv2.putText(frame, name, (panel_x + 20, y),
+                        self.font, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(frame, rating.upper(),
+                        (panel_x + panel_width - 60, y),
+                        self.font, 0.3, color, 1, cv2.LINE_AA)
+
+    def _draw_technique_frame(self, frame: np.ndarray, landmarks: dict, event):
+        """Draw annotations for a frame-by-frame technique event."""
+        # Build ratings from check results
+        from src.mechanics_engine import MechanicResult
+
+        # Convert TechniqueEvent check_results to MechanicResult-compatible format
+        # for reuse of existing rendering functions
+        mechanic_results = []
+        for r in event.check_results:
+            # Extract side from check_name (e.g., "knee_angle_left" -> "left")
+            side = None
+            base_name = r.check_name
+            for s in ("_left", "_right"):
+                if r.check_name.endswith(s):
+                    side = s[1:]  # Remove leading underscore
+                    base_name = r.check_name[:-len(s)]
+                    break
+
+            mechanic_results.append(MechanicResult(
+                name=base_name,
+                display_name=r.display_name,
+                value=r.metric_value if r.metric_value is not None else 0.0,
+                rating=r.rating,
+                feedback=r.feedback,
+                side=side,
+            ))
+
+        # Use existing rated skeleton + issue highlight rendering
+        if self.show_skeleton:
+            self._draw_skeleton_rated(frame, landmarks, mechanic_results)
+
+        if mechanic_results:
+            self._draw_issue_highlights(frame, landmarks, mechanic_results)
+
+        if self.show_hud and mechanic_results:
+            self._draw_hud(frame, mechanic_results)
