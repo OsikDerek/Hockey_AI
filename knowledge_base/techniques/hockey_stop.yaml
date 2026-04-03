@@ -1,0 +1,106 @@
+# Hockey Stop Technique — Coaching Knowledge Base
+# ================================================
+# Basic technique definitions. Derek: specialize these thresholds
+# and add drills based on your coaching expertise.
+#
+# NOTE: This uses FrameByFrame angle checks for now. A custom
+# StopDetector could be added later to detect the stop event
+# (deceleration phase) and evaluate edge angles specifically.
+
+technique:
+  name: hockey_stop
+  display_name: "Hockey Stop"
+  description: "Two-foot hockey stop — edge control, body position, and weight distribution"
+
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both
+
+  checks:
+    knee_angle:
+      display_name: "Knee Bend"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      # Stopping requires deep bend for stability and edge control
+      good_range: [85, 120]
+      warning_range: [70, 135]
+      feedback:
+        good: "Deep knee bend -- good stopping position"
+        warning: "Need more knee bend for a stable stop"
+        poor: "Legs too straight -- will slide out on stops"
+      drills:
+        warning:
+          - name: "Snow Shower Stops"
+            description: "Practice making as much snow as possible on each stop -- forces edge pressure and knee bend"
+            cue: "Bend your knees and dig in -- the more snow, the better your edges"
+        poor:
+          - name: "Snowplow to Hockey Stop Progression"
+            description: "Start with snowplow stops, progressively add speed as knee bend improves"
+            cue: "If you cannot stop slowly, you cannot stop fast -- build from basics"
+      annotation:
+        joint: "{side}_knee"
+        segments:
+          - ["{side}_hip", "{side}_knee"]
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "KNEE"
+
+    hip_angle:
+      display_name: "Hip Position"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [70, 110]
+      warning_range: [55, 130]
+      feedback:
+        good: "Good hip position in stop"
+        warning: "Hips too high -- lower center of gravity"
+        poor: "Hip position making stops unstable"
+      drills:
+        warning:
+          - name: "Low Stop Holds"
+            description: "Stop and hold the stopped position for 3 seconds. Focus on staying low."
+            cue: "Freeze at the bottom -- you should be able to hold it"
+      annotation:
+        joint: "{side}_hip"
+        short_label: "HIP"
+
+    trunk_alignment:
+      display_name: "Shoulder Level"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      # Shoulders must stay level and parallel to ice during stop
+      good_range: [-8, 8]
+      warning_range: [-15, 15]
+      feedback:
+        good: "Shoulders level -- good stopping balance"
+        warning: "Dropping inside shoulder -- counterbalance with upper body"
+        poor: "Shoulders not level -- will lose balance on hard stops"
+      drills:
+        warning:
+          - name: "Stick Overhead Stops"
+            description: "Hold stick overhead with both hands while stopping -- forces shoulders level"
+            cue: "Stick stays flat and level -- if it tilts, your shoulders are tilting"
+        poor:
+          - name: "Partner Push Stop"
+            description: "Partner gives light push during stop. If shoulders tilt, you go down."
+            cue: "Counterbalance with your upper body -- shoulders fight against the turn"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "BALANCE"
+
+  coaching_notes:
+    - "Two-foot stop: outside skate uses inside edge, inside skate uses outside edge"
+    - "Weight distribution: more weight on outside skate (inside edge) for stability"
+    - "Counterbalance with upper body -- shoulders stay parallel to ice"
+    - "Head up, do not look down at skates"
+    - "Both inside edges together = most stable stopping position"
+    - "Common mistake: dropping inside shoulder toward the ice"
+    - "Practice stopping to BOTH sides -- most players have a weak side"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both

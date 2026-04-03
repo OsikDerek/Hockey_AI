@@ -1,0 +1,134 @@
+# Backwards Skating Technique — Coaching Knowledge Base
+# =====================================================
+# Basic technique definitions. Derek: specialize these thresholds
+# and add drills based on your coaching expertise.
+
+technique:
+  name: backwards_skating
+  display_name: "Backwards Skating"
+  description: "Backwards skating mechanics — C-cuts, body position, and extension"
+
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both
+
+  checks:
+    knee_angle:
+      display_name: "Knee Bend"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      # Backwards skating requires DEEPER knee bend than forward
+      good_range: [85, 115]
+      warning_range: [75, 130]
+      feedback:
+        good: "Deep knee bend -- good backwards power position"
+        warning: "Need deeper knee bend -- backside should be parallel to ice"
+        poor: "Standing too tall -- losing power and balance going backwards"
+      drills:
+        warning:
+          - name: "Backwards Glide Holds"
+            description: "Glide backwards on one foot, holding deep knee bend for 3 seconds"
+            cue: "Sit on a stool -- backside parallel to the ice"
+        poor:
+          - name: "Stationary Backwards Stance"
+            description: "Hold backwards skating position stationary. Partner checks knee angle."
+            cue: "You should feel like you are sitting -- if your legs are straight, drop lower"
+      annotation:
+        joint: "{side}_knee"
+        segments:
+          - ["{side}_hip", "{side}_knee"]
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "KNEE"
+
+    hip_angle:
+      display_name: "Hip Position"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [65, 105]
+      warning_range: [50, 125]
+      feedback:
+        good: "Good hip position for backwards skating"
+        warning: "Hips too high or too low -- adjust for balance"
+        poor: "Hip position compromising backwards power and balance"
+      drills:
+        warning:
+          - name: "Hip Drop C-Cuts"
+            description: "Do C-cuts focusing only on keeping hips low and square"
+            cue: "Hips stay level -- no swiveling side to side"
+        poor:
+          - name: "Wall Sit to C-Cut Transition"
+            description: "Hold wall sit position, then step on ice and immediately do C-cuts maintaining that depth"
+            cue: "Remember what low feels like off-ice -- bring that feeling on-ice"
+      annotation:
+        joint: "{side}_hip"
+        segments:
+          - ["{side}_shoulder", "{side}_hip"]
+          - ["{side}_hip", "{side}_knee"]
+        short_label: "HIP"
+
+    forward_lean:
+      display_name: "Torso Position"
+      type: angle
+      angle_function: forward_lean_angle
+      per_side: false
+      # Backwards skating: more upright than forward, but not fully vertical
+      good_range: [10, 35]
+      warning_range: [5, 45]
+      feedback:
+        good: "Good torso angle for backwards skating"
+        warning: "Torso too far forward or too upright -- adjust balance"
+        poor: "Upper body position hurting backwards balance and speed"
+      drills:
+        warning:
+          - name: "Chest-Up C-Cuts"
+            description: "Do backwards C-cuts with focus on keeping chest up and back straight"
+            cue: "Back straight, not hunched -- weight centered over middle of skates"
+        poor:
+          - name: "Partner Mirror Drill"
+            description: "Partner skates forward slowly, you mirror backwards maintaining proper position"
+            cue: "If you are leaning too far forward, you will fall into your partner"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "TORSO"
+
+    trunk_alignment:
+      display_name: "Hip Square"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      # Hips should stay square -- no swiveling
+      good_range: [-6, 6]
+      warning_range: [-12, 12]
+      feedback:
+        good: "Hips square -- good backwards alignment"
+        warning: "Hips rotating -- keep them square"
+        poor: "Significant hip swivel -- losing power and direction"
+      drills:
+        warning:
+          - name: "Hands on Hips Backwards"
+            description: "Skate backwards with hands on hips -- forces hip awareness"
+            cue: "Belt buckle stays pointing straight -- no twisting"
+        poor:
+          - name: "Stick Across Hips Drill"
+            description: "Hold stick across front of hips while skating backwards. Stick should stay level and straight."
+            cue: "If the stick twists, your hips are twisting -- keep it straight"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "SQUARE"
+
+  coaching_notes:
+    - "Feel like sitting on a stool -- backside almost parallel to ice"
+    - "Carve C-cuts out in FRONT of your body, not straight to the side"
+    - "Fully extend through the toe on each C-cut, then snap toe and bring heel back under body"
+    - "Glide foot stays under the body maintaining a straight line"
+    - "Keep hips square -- no swiveling side to side"
+    - "Head up, back straight, weight centered over middle of skates"
+    - "Limit upper body movement -- arms should not swing side to side"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both

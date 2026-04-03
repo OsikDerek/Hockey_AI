@@ -1,0 +1,131 @@
+# Edge Work Technique — Coaching Knowledge Base
+# ==============================================
+# Basic technique definitions. Derek: specialize these thresholds
+# and add drills based on your coaching expertise.
+
+technique:
+  name: edge_work
+  display_name: "Edge Work"
+  description: "Inside and outside edge control — balance, ankle engagement, and body position"
+
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both
+
+  checks:
+    knee_angle:
+      display_name: "Knee Bend"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      # Edge work requires deep, controlled knee bend
+      good_range: [85, 120]
+      warning_range: [70, 135]
+      feedback:
+        good: "Good knee bend for edge control"
+        warning: "Deeper knee bend needed for better edge pressure"
+        poor: "Legs too straight -- cannot engage edges properly"
+      drills:
+        warning:
+          - name: "Inside Edge Glides"
+            description: "Glide on inside edges only, focusing on pressing shin into boot tongue"
+            cue: "Push your shin into the tongue -- feel the edge bite"
+        poor:
+          - name: "Stationary Edge Holds"
+            description: "Stand on one foot, tilt to inside edge, hold 5 seconds. Repeat on outside edge."
+            cue: "If you cannot hold an edge standing still, you cannot hold it moving"
+      annotation:
+        joint: "{side}_knee"
+        segments:
+          - ["{side}_hip", "{side}_knee"]
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "KNEE"
+
+    ankle_dorsiflexion:
+      display_name: "Ankle Engagement"
+      type: angle
+      angle_function: ankle_dorsiflexion
+      per_side: true
+      # Edge work depends heavily on ankle flex
+      good_range: [65, 90]
+      warning_range: [55, 105]
+      feedback:
+        good: "Strong ankle engagement -- good edge control"
+        warning: "More ankle flex needed -- press into the boot"
+        poor: "Ankles too stiff -- edges will be weak and unreliable"
+      drills:
+        warning:
+          - name: "Single-Foot Sculling"
+            description: "Scull forward on one foot, pressing into inside edge with ankle"
+            cue: "The ankle drives the edge -- feel the blade carve"
+        poor:
+          - name: "Ankle Mobility Band Work (Off-Ice)"
+            description: "Banded ankle dorsiflexion stretches, 2x20 each side"
+            cue: "If your ankles are stiff off-ice, they are stiff on-ice"
+          - name: "Edge Circles"
+            description: "Skate tight circles on one foot, alternating inside and outside edges"
+            cue: "Make the circles smaller -- smaller circle = better edge control"
+      annotation:
+        joint: "{side}_ankle"
+        segments:
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "ANKLE"
+
+    hip_angle:
+      display_name: "Hip Position"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [65, 110]
+      warning_range: [50, 130]
+      feedback:
+        good: "Good hip position for edge work"
+        warning: "Hips need adjustment for better edge control"
+        poor: "Hip position limiting edge engagement"
+      drills:
+        warning:
+          - name: "Hip-Open Edge Drill"
+            description: "Practice opening hips while maintaining edge pressure on turns"
+            cue: "Open the hips into the turn -- feel the edge dig in"
+      annotation:
+        joint: "{side}_hip"
+        short_label: "HIP"
+
+    trunk_alignment:
+      display_name: "Balance"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      good_range: [-10, 10]
+      warning_range: [-18, 18]
+      feedback:
+        good: "Balanced posture on edges"
+        warning: "Leaning too much -- center of gravity off the edge"
+        poor: "Significant balance issue -- will fall off edges under pressure"
+      drills:
+        warning:
+          - name: "One-Foot Glides"
+            description: "Glide on one foot for as long as possible on each edge"
+            cue: "Arms out for balance at first -- then try hands on knees"
+        poor:
+          - name: "Balance Board Work (Off-Ice)"
+            description: "Single-leg balance board holds, 3x30s each side"
+            cue: "Edge control starts with balance -- train it off-ice"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "BALANCE"
+
+  coaching_notes:
+    - "Two edges per skate: inside edge and outside edge"
+    - "Inside edge is stronger and more natural -- outside edge needs extra practice"
+    - "Lean into the outside edge -- start with wider turns, get tighter as confidence grows"
+    - "At 45 degrees of lean, the edge is at maximum grip"
+    - "Ankle drives the edge -- stiff ankles = weak edges"
+    - "Knee bend creates edge pressure -- the lower you are, the more bite you get"
+    - "Most players neglect outside edges -- double the reps on outside edge drills"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both

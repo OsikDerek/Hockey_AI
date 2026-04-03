@@ -1,0 +1,98 @@
+# Transitions Technique — Coaching Knowledge Base
+# ================================================
+# Forward-to-backward and backward-to-forward transitions.
+# Basic technique definitions. Derek: specialize these.
+
+technique:
+  name: transitions
+  display_name: "Transitions"
+  description: "Forward-to-backward and backward-to-forward pivots — speed maintenance and body control"
+
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both
+
+  checks:
+    knee_angle:
+      display_name: "Knee Bend"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      # Deep bend essential through the pivot -- most players stand up during transition
+      good_range: [85, 120]
+      warning_range: [75, 135]
+      feedback:
+        good: "Maintained knee bend through transition -- good speed retention"
+        warning: "Standing up during transition -- losing speed"
+        poor: "Legs straightened through pivot -- significant speed loss"
+      drills:
+        warning:
+          - name: "Pivot Glides"
+            description: "Glide forward, pivot to backwards, focus ONLY on maintaining same knee bend throughout"
+            cue: "Your head should stay at the same height -- no bobbing up during the turn"
+        poor:
+          - name: "Slow-Motion Pivots"
+            description: "Walk through pivots at slowest possible speed, exaggerating low position"
+            cue: "Stay low the ENTIRE time -- the moment you stand up, start over"
+      annotation:
+        joint: "{side}_knee"
+        short_label: "KNEE"
+
+    hip_angle:
+      display_name: "Hip Position"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [65, 110]
+      warning_range: [50, 130]
+      feedback:
+        good: "Good hip engagement through transition"
+        warning: "Hips rising during pivot -- maintain low position"
+        poor: "Lost hip position through transition"
+      drills:
+        warning:
+          - name: "Hip-Level Pivots"
+            description: "Partner watches hip height during pivot -- should not rise"
+            cue: "Imagine a ceiling 2 inches above your head -- do not hit it"
+      annotation:
+        joint: "{side}_hip"
+        short_label: "HIP"
+
+    trunk_alignment:
+      display_name: "Torso Control"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      good_range: [-10, 10]
+      warning_range: [-18, 18]
+      feedback:
+        good: "Controlled torso through transition"
+        warning: "Upper body wobble during pivot -- tighten core"
+        poor: "Significant balance loss during transition"
+      drills:
+        warning:
+          - name: "Stick Overhead Pivots"
+            description: "Hold stick overhead during pivots -- forces core engagement and balance"
+            cue: "Stick stays level -- if it tilts, your core is not engaged"
+        poor:
+          - name: "Puck-on-Stick Pivots"
+            description: "Balance puck on blade while pivoting -- forces smooth, controlled transitions"
+            cue: "If the puck falls, you are not smooth enough -- make it effortless"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "BALANCE"
+
+  coaching_notes:
+    - "Head stays at the same level throughout the transition -- no bobbing up"
+    - "Hips initiate the pivot -- feet follow"
+    - "Maintain speed through the transition -- most players slow down because they stand up"
+    - "Keep stick on the ice through the entire pivot"
+    - "Eyes stay on the play -- head turns first, body follows"
+    - "Practice both directions equally -- most players favor one pivot direction"
+    - "The best defensemen transition without losing ANY speed"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both
