@@ -1,0 +1,142 @@
+# Stickhandling Technique — Coaching Knowledge Base
+# =================================================
+# Basic technique definitions. Derek: specialize these.
+#
+# NOTE: Full stickhandling analysis needs stick/puck tracking
+# (object detection). For now, body mechanics only — stance,
+# head position, knee bend. These are the foundations that
+# separate good stickhandlers from great ones.
+#
+# Future: custom StickhandlingDetector that tracks hand positions
+# relative to body, puck control zone, and head orientation.
+
+technique:
+  name: stickhandling
+  display_name: "Stickhandling"
+  description: "Stickhandling body mechanics — athletic stance, head position, and body control while handling"
+
+  detection:
+    detector: FrameByFrame
+    params:
+      min_visibility: 0.5
+      analyze_sides: both
+
+  checks:
+    knee_angle:
+      display_name: "Athletic Stance"
+      type: angle
+      angle_function: knee_angle
+      per_side: true
+      # Cannot stickhandle with straight legs -- need wide athletic stance
+      good_range: [90, 130]
+      warning_range: [75, 145]
+      feedback:
+        good: "Good athletic stance -- puck protected with body position"
+        warning: "Legs straightening -- losing puck protection and agility"
+        poor: "Standing tall while handling -- puck is exposed and you cannot move"
+      drills:
+        warning:
+          - name: "Low Stickhandling"
+            description: "Stickhandle while maintaining deep knee bend. Partner calls out when knees rise."
+            cue: "Stay LOW -- the moment your knees straighten, the puck is vulnerable"
+        poor:
+          - name: "Knee-Touch Stickhandling"
+            description: "Stickhandle continuously. Every 5 seconds, touch one knee to the ice while maintaining control."
+            cue: "If you cannot touch your knee while handling, you are not low enough"
+      annotation:
+        joint: "{side}_knee"
+        segments:
+          - ["{side}_hip", "{side}_knee"]
+          - ["{side}_knee", "{side}_ankle"]
+        short_label: "STANCE"
+
+    hip_angle:
+      display_name: "Hip Position"
+      type: angle
+      angle_function: hip_angle
+      per_side: true
+      good_range: [65, 115]
+      warning_range: [50, 135]
+      feedback:
+        good: "Good hip position -- protecting the puck with body"
+        warning: "Hips too high -- losing puck protection"
+        poor: "Hips not engaged -- body not shielding the puck"
+      drills:
+        warning:
+          - name: "Puck Protection Circles"
+            description: "Stickhandle while skating in circles. Defender tries to poke check."
+            cue: "Hips between the puck and the defender -- always"
+        poor:
+          - name: "Hip Shield Drill"
+            description: "Stand sideways to boards. Stickhandle on the far side. Hips shield puck from boards."
+            cue: "Your hip is a wall -- the puck lives behind it"
+      annotation:
+        joint: "{side}_hip"
+        short_label: "HIPS"
+
+    forward_lean:
+      display_name: "Head/Eyes Up"
+      type: angle
+      angle_function: forward_lean_angle
+      per_side: false
+      # Too much forward lean = looking down at puck
+      # Stickhandling requires more upright than skating to keep eyes up
+      good_range: [15, 40]
+      warning_range: [5, 55]
+      feedback:
+        good: "Good posture -- head up, eyes scanning"
+        warning: "Leaning too far forward -- eyes dropping to the puck"
+        poor: "Head down watching the puck -- cannot see the ice"
+      drills:
+        warning:
+          - name: "Number Call Stickhandling"
+            description: "Coach holds up fingers while player stickhandles. Player calls out the number."
+            cue: "If you cannot see the numbers, your eyes are on the puck -- look UP"
+        poor:
+          - name: "Blindfold Stickhandling"
+            description: "Stickhandle with eyes closed for 10 seconds. Builds feel so you do not need to watch."
+            cue: "Your hands should FEEL the puck -- your eyes should be reading the play"
+          - name: "TV Stickhandling"
+            description: "Off-ice: stickhandle a ball while watching TV. Must be able to follow the show."
+            cue: "Thousands of touches with eyes up -- that is how you build soft hands"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "EYES UP"
+
+    trunk_alignment:
+      display_name: "Balance"
+      type: angle
+      angle_function: trunk_alignment
+      per_side: false
+      good_range: [-8, 8]
+      warning_range: [-15, 15]
+      feedback:
+        good: "Balanced while handling -- can move in any direction"
+        warning: "Leaning to one side -- limits which direction you can go"
+        poor: "Off-balance while handling -- easy to knock off the puck"
+      drills:
+        warning:
+          - name: "Four-Direction Stickhandling"
+            description: "Stickhandle, then on whistle explode in a random direction (F/B/L/R)"
+            cue: "If you are leaning, you can only go one way -- stay centered to go ANY way"
+        poor:
+          - name: "Single-Leg Stickhandling"
+            description: "Balance on one foot while stickhandling. Switch feet every 10 seconds."
+            cue: "Balance is the foundation -- cannot dangle if you cannot stand"
+      annotation:
+        joint: "left_shoulder"
+        short_label: "BALANCE"
+
+  coaching_notes:
+    - "Bottom hand stays LOOSE -- it is just a guide. Top hand does the turning and rolling."
+    - "Soft hands: think of catching an egg -- cushion the puck, do not grip it"
+    - "Head up, eyes scanning -- you need thousands of touches to handle without looking"
+    - "Wide athletic stance with knees bent -- cannot protect puck with straight legs"
+    - "Puck should be in your 'stickhandling zone' -- roughly in front of your body"
+    - "Hands away from body for maximum range of motion"
+    - "When knees straighten during handling, the puck becomes vulnerable -- stay bent"
+    - "Every tight-area stickhandling drill should include a visual task (calling numbers, reading play)"
+
+  settings:
+    min_visibility: 0.5
+    analyze_sides: both
