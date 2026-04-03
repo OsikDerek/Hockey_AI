@@ -27,3 +27,5 @@ Thumbs.db
 
 # Notebooks checkpoints
 .ipynb_checkpoints/
+models/HockeyAI_model_weight.pt
+models/*.pt

@@ -20,6 +20,10 @@ technique:
     params:
       min_visibility: 0.5
       analyze_sides: both
+      # Puck tracking (requires model in models/ directory)
+      object_tracking: true
+      puck_model: models/HockeyAI_model_weight.pt
+      puck_detection_interval: 2   # Every other frame for speed
 
   checks:
     knee_angle:
@@ -74,19 +78,19 @@ technique:
         joint: "{side}_hip"
         short_label: "HIPS"
 
-    forward_lean:
+    head_pitch:
       display_name: "Head/Eyes Up"
       type: angle
-      angle_function: forward_lean_angle
+      angle_function: head_pitch
       per_side: false
-      # Too much forward lean = looking down at puck
-      # Stickhandling requires more upright than skating to keep eyes up
-      good_range: [15, 40]
-      warning_range: [5, 55]
+      # Lower angle = head more upright. Higher = looking down at puck.
+      # 0 = perfectly upright, ~20-45 = good scanning, >55 = watching puck
+      good_range: [10, 45]
+      warning_range: [5, 60]
       feedback:
-        good: "Good posture -- head up, eyes scanning"
-        warning: "Leaning too far forward -- eyes dropping to the puck"
-        poor: "Head down watching the puck -- cannot see the ice"
+        good: "Head up, eyes scanning the ice -- good awareness"
+        warning: "Head starting to drop -- eyes moving toward the puck"
+        poor: "Head down watching the puck -- cannot see the play"
       drills:
         warning:
           - name: "Number Call Stickhandling"
@@ -100,8 +104,29 @@ technique:
             description: "Off-ice: stickhandle a ball while watching TV. Must be able to follow the show."
             cue: "Thousands of touches with eyes up -- that is how you build soft hands"
       annotation:
-        joint: "left_shoulder"
+        joint: "nose"
         short_label: "EYES UP"
+
+    hand_separation:
+      display_name: "Hand Spacing"
+      type: angle
+      angle_function: hand_separation
+      per_side: false
+      # Normalized by shoulder width. ~0.8-1.5 = good spacing for control
+      good_range: [0.6, 1.6]
+      warning_range: [0.3, 2.0]
+      feedback:
+        good: "Good hand spacing on the stick -- balanced control"
+        warning: "Hand spacing off -- too close limits control, too wide limits power"
+        poor: "Hands poorly positioned on stick -- losing puck control"
+      drills:
+        warning:
+          - name: "Tape Marker Drill"
+            description: "Put tape marks on stick for ideal hand positions. Practice returning to them."
+            cue: "Feel where your hands should be -- it should become automatic"
+      annotation:
+        joint: "left_wrist"
+        short_label: "HANDS"
 
     trunk_alignment:
       display_name: "Balance"
@@ -126,6 +151,48 @@ technique:
       annotation:
         joint: "left_shoulder"
         short_label: "BALANCE"
+
+    # --- Puck tracking checks (require object_tracking: true) ---
+    puck_body_distance:
+      display_name: "Puck Control Zone"
+      type: angle
+      angle_function: puck_body_distance
+      per_side: false
+      # Normalized by shoulder width. Good zone = close enough to protect
+      good_range: [0.3, 1.5]
+      warning_range: [0.15, 2.0]
+      feedback:
+        good: "Puck in good control zone -- protected by body"
+        warning: "Puck drifting away from body -- losing protection"
+        poor: "Puck too far from body -- exposed to defenders"
+      drills:
+        warning:
+          - name: "Tight Space Handling"
+            description: "Stickhandle in a 3x3 foot square. Keep the puck INSIDE the square."
+            cue: "Small moves, close to the body -- the puck lives in your protection zone"
+        poor:
+          - name: "Cone Circle Stickhandling"
+            description: "Set up 4 cones in a tight circle. Stickhandle while staying inside."
+            cue: "If the puck leaves the circle, you lost it in a game"
+      annotation:
+        joint: "left_wrist"
+        short_label: "PUCK"
+
+    puck_stick_proximity:
+      display_name: "Stick on Puck"
+      type: angle
+      angle_function: puck_stick_proximity
+      per_side: false
+      # How close the puck is to a wrist (stick). Lower = better contact.
+      good_range: [0.0, 0.8]
+      warning_range: [0.0, 1.3]
+      feedback:
+        good: "Puck on the stick -- good feel"
+        warning: "Puck getting away from stick blade"
+        poor: "Puck off the stick -- lost control"
+      annotation:
+        joint: "left_wrist"
+        short_label: "CONTACT"
 
   coaching_notes:
     - "Bottom hand stays LOOSE -- it is just a guide. Top hand does the turning and rolling."

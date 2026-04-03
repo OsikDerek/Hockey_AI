@@ -30,6 +30,7 @@ from src.annotator import SkatingAnnotator
 from src.stride_detector import StrideDetector
 from src.crossover_analyzer import CrossoverDetector as LegacyCrossoverDetector
 from src.technique_engine import TechniqueEngine
+from src.object_tracker import ObjectTracker
 from src.report_generator import ReportGenerator
 from src.video_preprocessing import SkaterCropper
 from src.utils import ensure_dir, format_timestamp
@@ -149,6 +150,18 @@ def run_technique_mode(args, meta):
         technique_engine=technique_engine,
     )
 
+    # Object tracker (puck detection) — only if technique config requests it
+    object_tracker = None
+    det_params = technique_engine.config.get("detection", {}).get("params", {})
+    if det_params.get("object_tracking", False):
+        puck_model = det_params.get("puck_model", "models/puck_yolov8n.pt")
+        puck_interval = det_params.get("puck_detection_interval", 2)
+        print(f"Initializing object tracker (model: {puck_model})...")
+        object_tracker = ObjectTracker(
+            model_path=puck_model,
+            detection_interval=puck_interval,
+        )
+
     # Auto-crop preprocessor
     cropper = None
     if args.auto_crop:
@@ -187,6 +200,11 @@ def run_technique_mode(args, meta):
             if smoother is not None:
                 landmarks = smoother.update(landmarks)
             angles = compute_all_angles(landmarks)
+
+        # Object tracking (puck detection) — merge metrics into angles
+        if object_tracker is not None:
+            object_metrics = object_tracker.process_frame(frame, landmarks)
+            angles.update(object_metrics)
 
         technique_engine.add_frame(landmarks=landmarks, angles=angles)
         frame_data.append((frame, landmarks, angles))

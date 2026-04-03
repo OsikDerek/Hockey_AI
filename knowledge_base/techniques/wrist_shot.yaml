@@ -111,6 +111,52 @@ technique:
         joint: "left_shoulder"
         short_label: "BALANCE"
 
+    hands_from_body:
+      display_name: "Hands Out Front"
+      type: angle
+      angle_function: hands_from_body
+      per_side: false
+      # Normalized by shoulder width. Hands should be away from body for power.
+      good_range: [0.8, 2.0]
+      warning_range: [0.5, 2.5]
+      feedback:
+        good: "Hands out in front -- good power position"
+        warning: "Hands too close to body -- limiting stick flex and power"
+        poor: "Hands tucked in -- cannot generate power. Get hands OUT"
+      drills:
+        warning:
+          - name: "Extended Shooting Drill"
+            description: "Practice shooting with arms fully extended before pulling top hand"
+            cue: "Reach out, THEN pull -- the further out you start, the more flex you get"
+        poor:
+          - name: "No-Puck Shooting Form"
+            description: "Practice shooting motion without puck. Focus on hand extension."
+            cue: "If your elbows are bent at your sides, you have zero power"
+      annotation:
+        joint: "left_wrist"
+        short_label: "HANDS"
+
+    stick_follow_through:
+      display_name: "Follow Through"
+      type: angle
+      angle_function: stick_angle_proxy
+      per_side: false
+      # Angle of wrist-to-wrist line. During follow-through, should point toward target.
+      good_range: [-20, 35]
+      warning_range: [-40, 50]
+      feedback:
+        good: "Good follow-through toward target"
+        warning: "Follow-through direction off -- point stick at the target"
+        poor: "No follow-through -- losing accuracy and power"
+      drills:
+        warning:
+          - name: "Freeze Frame Follow-Through"
+            description: "Shoot and freeze at end of follow-through. Check: is your stick pointing at the target?"
+            cue: "Where your stick finishes is where the puck goes"
+      annotation:
+        joint: "right_wrist"
+        short_label: "FOLLOW"
+
   coaching_notes:
     - "Hands shoulder-width apart, away from body"
     - "Puck starts on heel of blade, transfers to toe during release"

@@ -106,6 +106,26 @@ technique:
         joint: "left_shoulder"
         short_label: "BALANCE"
 
+    hands_from_body:
+      display_name: "Hands Out Front"
+      type: angle
+      angle_function: hands_from_body
+      per_side: false
+      good_range: [0.7, 2.0]
+      warning_range: [0.4, 2.5]
+      feedback:
+        good: "Hands out in front -- good snap shot position"
+        warning: "Hands too close to body -- losing snap power"
+        poor: "Hands tucked in -- the snap comes from arm extension. Get hands OUT"
+      drills:
+        warning:
+          - name: "Extended Snap Release"
+            description: "Focus on getting top hand well ahead of body before snapping"
+            cue: "The further out your top hand starts, the more snap you generate"
+      annotation:
+        joint: "left_wrist"
+        short_label: "HANDS"
+
   coaching_notes:
     - "Puck starts on the TOE of the blade (unlike wrist shot which starts at heel)"
     - "Snap from toe to middle of blade while pressing down on bottom hand"

@@ -112,6 +112,27 @@ technique:
         joint: "left_shoulder"
         short_label: "BALANCE"
 
+    hand_separation:
+      display_name: "Hand Spacing"
+      type: angle
+      angle_function: hand_separation
+      per_side: false
+      # One-timer needs bottom hand low enough to create shaft flex
+      good_range: [0.8, 2.0]
+      warning_range: [0.5, 2.5]
+      feedback:
+        good: "Good hand spacing -- bottom hand positioned for flex"
+        warning: "Hand spacing off -- bottom hand should be lower for more flex"
+        poor: "Hands too close together -- cannot load the stick"
+      drills:
+        warning:
+          - name: "Low Bottom Hand Drill"
+            description: "Practice one-timer with bottom hand intentionally lower than normal"
+            cue: "Bottom hand is the driver -- position it low enough to flex the shaft"
+      annotation:
+        joint: "right_wrist"
+        short_label: "HANDS"
+
   coaching_notes:
     - "Hips initiate the shot -- think of front hip as a door hinge, shoulders are the door"
     - "Front skate points toward target as puck arrives (for right-handed: left skate to target)"
