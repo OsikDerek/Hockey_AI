@@ -54,6 +54,12 @@ def parse_args():
         help="Path to output annotated video (default: output/<input_name>_analyzed.mp4)",
     )
     parser.add_argument(
+        "--game-analysis", "-g",
+        action="store_true",
+        help="Game film analysis mode: multi-player tracking, zone detection, "
+             "decision evaluation (broadcast or practice footage)",
+    )
+    parser.add_argument(
         "--technique", "-t",
         default=None,
         help="Technique to analyze (e.g., crossover, forward_stride). "
@@ -655,7 +661,10 @@ def main():
     print(f"Output: {args.output}")
 
     # Route to appropriate pipeline
-    if args.technique:
+    if args.game_analysis:
+        from src.game_analysis import run_game_analysis_mode
+        run_game_analysis_mode(args, meta)
+    elif args.technique:
         run_technique_mode(args, meta)
     elif args.mode:
         run_legacy_mode(args, meta)
