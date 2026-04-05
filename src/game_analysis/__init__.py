@@ -18,7 +18,9 @@ from .game_context import FrameContext, GameAnalysis, TrackedObject
 from .game_tracker import GameTracker, GAME_OBJECT_CLASSES
 from .zone_detector import ZoneDetector
 from .broadcast_filter import BroadcastFilter
+from .possession_detector import PossessionDetector
 from .game_annotator import GameAnnotator
+from .decisions import DECISION_REGISTRY
 
 
 def run_game_analysis_mode(args, meta):
@@ -49,6 +51,21 @@ def run_game_analysis_mode(args, meta):
     )
 
     zone_detector = ZoneDetector(smoothing_window=15)
+    possession_detector = PossessionDetector(
+        proximity_threshold=120,
+        hysteresis_window=8,
+    )
+
+    # Initialize decision detectors
+    active_decisions = getattr(args, "decisions", None) or list(DECISION_REGISTRY.keys())
+    decision_detectors = {}
+    for name in active_decisions:
+        if name in DECISION_REGISTRY:
+            decision_detectors[name] = DECISION_REGISTRY[name]()
+            print(f"  Decision detector: {name}")
+    if not decision_detectors:
+        print("  No decision detectors active")
+
     annotator = GameAnnotator(
         show_boxes=True,
         show_zone=True,
@@ -99,6 +116,9 @@ def run_game_analysis_mode(args, meta):
         # Zone detection
         zone = zone_detector.update(objects, puck, meta["width"])
 
+        # Possession detection
+        possession_id = possession_detector.update(puck, players)
+
         # Build frame context
         ctx = FrameContext(
             frame_idx=frame_idx,
@@ -110,10 +130,15 @@ def run_game_analysis_mode(args, meta):
             referees=referees,
             rink_landmarks=rink_landmarks,
             zone=zone,
-            possession_player_id=None,  # Phase 2
+            possession_player_id=possession_id,
             is_gameplay=is_gameplay,
             is_camera_cut=is_camera_cut,
         )
+
+        # Feed to decision detectors
+        if is_gameplay:
+            for det in decision_detectors.values():
+                det.add_frame(ctx)
 
         analysis.frame_contexts.append(ctx)
         frame_data.append(frame)
@@ -147,6 +172,18 @@ def run_game_analysis_mode(args, meta):
     print(f"  Gameplay frames: {analysis.gameplay_frames}/{analysis.total_frames} "
           f"({analysis.gameplay_frames / max(analysis.total_frames, 1) * 100:.0f}%)")
     print(f"  Camera cuts: {analysis.camera_cuts}")
+
+    # ── Decision Analysis ─────────────────────────────────
+    print("\nAnalyzing decisions...")
+    for name, det in decision_detectors.items():
+        events = det.analyze(fps=meta["fps"])
+        analysis.events.extend(events)
+        if events:
+            print(f"  {name}: {len(events)} events detected")
+        else:
+            print(f"  {name}: no events detected")
+
+    print(f"  Total decision events: {len(analysis.events)}")
 
     # ── Pass 2: Render ────────────────────────────────────
     print("\nPass 2: Rendering annotated video...")
@@ -193,8 +230,16 @@ def run_game_analysis_mode(args, meta):
         print(f"  DECISION EVENTS: {summary['total_events']}")
         for etype, count in summary['events_by_type'].items():
             print(f"    {etype}: {count}")
+        print()
+        for event in analysis.events:
+            ts = f"{event.timestamp_sec:.1f}s"
+            print(f"  [{ts}] {event.event_type}: {event.decision_made} "
+                  f"(player #{event.player_id})")
+            if event.context:
+                for k, v in event.context.items():
+                    print(f"      {k}: {v}")
     else:
-        print("  DECISION EVENTS: None detected (Phase 2 feature)")
+        print("  DECISION EVENTS: None detected in this clip")
 
     print()
     print(f"  Total processing time: {total_time:.1f}s ({pass1_fps:.1f} fps tracking)")
