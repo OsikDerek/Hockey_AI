@@ -1,0 +1,56 @@
+situation:
+  name: breakout
+  display_name: "Breakout Decision"
+  description: "How the team exits the defensive zone with the puck"
+
+  checks:
+    dzone_time:
+      display_name: "Time in D-Zone"
+      metric: dzone_time
+      # Less time in D-zone before breakout = better
+      good_range: [0, 3.0]
+      warning_range: [0, 6.0]
+      feedback:
+        good: "Quick breakout -- efficient zone exit"
+        warning: "Spent time in D-zone before breaking out"
+        poor: "Extended D-zone time -- breakout was slow"
+
+    exit_speed:
+      display_name: "Exit Speed"
+      metric: exit_speed
+      # Higher exit speed = cleaner breakout
+      good_range: [8.0, 50.0]
+      warning_range: [4.0, 60.0]
+      feedback:
+        good: "Good speed on the breakout"
+        warning: "Breakout speed was moderate"
+        poor: "Slow exit -- gives opponents time to regroup"
+
+    success:
+      display_name: "Breakout Success"
+      metric: success
+      # Boolean: did we maintain possession after exiting?
+      good_range: [1, 1]
+      warning_range: [0, 1]
+      feedback:
+        good: "Clean exit -- maintained possession"
+        warning: "Breakout result unclear"
+        poor: "Breakout failed -- lost possession or returned to D-zone"
+
+  feedback:
+    carry: "Player carried the puck out of the zone"
+    direct_pass: "Clean pass to a teammate up ice"
+    rim: "Puck sent along the boards"
+    chip: "Puck chipped off the boards or glass"
+
+  alternatives:
+    chip: "If teammates are open, a direct pass creates more speed"
+    rim: "Rim can be predictable -- look for a direct pass if pressure allows"
+    carry: "If heavy forecheck, consider a quick pass instead of trying to stickhandle out"
+
+  coaching_notes:
+    - "First pass out of the zone is the most important pass in hockey"
+    - "Quick, short passes to the open man -- do not force stretch passes under pressure"
+    - "If the forecheck is heavy, go behind the net and use the defenseman as support"
+    - "Rim only works if your winger is winning the board battle"
+    - "Best breakout: quick up the middle for immediate transition speed"

@@ -1,0 +1,43 @@
+situation:
+  name: shot_vs_pass
+  display_name: "Shot vs Pass Decision"
+  description: "When a player releases the puck in the offensive zone, was shooting the right call?"
+
+  checks:
+    defenders_blocking:
+      display_name: "Shooting Lane"
+      metric: defenders_blocking
+      # Fewer blockers = better lane = shooting is more justified
+      good_range: [0, 1]
+      warning_range: [0, 2]
+      feedback:
+        good: "Open shooting lane -- shot was justified"
+        warning: "Partial screen -- could go either way"
+        poor: "Lane blocked by multiple defenders -- passing was likely better"
+
+    open_teammates:
+      display_name: "Pass Options Available"
+      metric: open_teammates
+      # Fewer open teammates = shooting is more justified
+      # NOTE: This is inverted -- MORE open teammates = potentially wrong to shoot
+      good_range: [0, 1]
+      warning_range: [0, 2]
+      feedback:
+        good: "No better passing option available"
+        warning: "Teammate had some space -- consider the pass"
+        poor: "Wide open teammate -- should have passed"
+
+  feedback:
+    shot: "Player chose to shoot"
+    pass: "Player chose to pass"
+    dump: "Player dumped the puck"
+
+  alternatives:
+    shot: "If lane is blocked, look for a pass to create a better angle"
+    dump: "Try to maintain possession -- shoot or pass instead of dumping"
+
+  coaching_notes:
+    - "When in doubt and you have a lane, shoot -- pucks on net create opportunities"
+    - "A good pass that creates a better shot is always better than a forced shot"
+    - "If you have 2+ defenders in your lane and an open teammate, pass every time"
+    - "Quick release beats a perfect shot -- get it off before the lane closes"

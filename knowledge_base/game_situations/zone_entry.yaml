@@ -1,0 +1,43 @@
+situation:
+  name: zone_entry
+  display_name: "Zone Entry Decision"
+  description: "How the puck enters the offensive zone -- carry, dump, or pass-in"
+
+  checks:
+    entry_speed:
+      display_name: "Entry Speed"
+      metric: entry_speed
+      # Higher speed entries with possession are generally better
+      good_range: [5.0, 50.0]
+      warning_range: [2.0, 60.0]
+      feedback:
+        good: "Good speed through the zone entry"
+        warning: "Entry speed could be higher -- attack with pace"
+        poor: "Too slow entering the zone -- defenders can set up"
+
+    num_players_in_zone:
+      display_name: "Support in Zone"
+      metric: num_players_in_zone
+      # More support = more options
+      good_range: [3, 10]
+      warning_range: [2, 10]
+      feedback:
+        good: "Good support from teammates in the zone"
+        warning: "Limited support -- be ready to protect the puck"
+        poor: "Entering alone -- high risk of turnover"
+
+  feedback:
+    carry: "Carried the puck into the offensive zone"
+    dump: "Dumped the puck into the zone"
+    pass_in: "Passed the puck to a teammate in the zone"
+
+  alternatives:
+    dump: "If you have speed and space, carry it in to maintain possession"
+    carry: "If 2+ defenders are at the blue line, consider dump-in and forecheck"
+
+  coaching_notes:
+    - "Carry-ins generate roughly 2x the shot attempts compared to dump-ins"
+    - "If you have speed advantage, ALWAYS carry -- dump-in gives up that speed"
+    - "Dump and chase works when your forwards are faster than their D"
+    - "Pass-in to a teammate with speed is the best of both worlds"
+    - "Read the gap -- tight gap = dump, loose gap = carry"

@@ -60,6 +60,13 @@ def parse_args():
              "decision evaluation (broadcast or practice footage)",
     )
     parser.add_argument(
+        "--play-style",
+        default="balanced",
+        choices=["balanced", "possession", "physical", "speed", "defensive"],
+        help="Team play style preset for decision evaluation bias "
+             "(default: balanced). Options: possession, physical, speed, defensive",
+    )
+    parser.add_argument(
         "--technique", "-t",
         default=None,
         help="Technique to analyze (e.g., crossover, forward_stride). "

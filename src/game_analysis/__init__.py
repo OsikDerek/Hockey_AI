@@ -19,7 +19,9 @@ from .game_tracker import GameTracker, GAME_OBJECT_CLASSES
 from .zone_detector import ZoneDetector
 from .broadcast_filter import BroadcastFilter
 from .possession_detector import PossessionDetector
+from .play_evaluator import PlayEvaluator
 from .game_annotator import GameAnnotator
+from .game_report import GameReportGenerator
 from .decisions import DECISION_REGISTRY
 
 
@@ -65,6 +67,14 @@ def run_game_analysis_mode(args, meta):
             print(f"  Decision detector: {name}")
     if not decision_detectors:
         print("  No decision detectors active")
+
+    # Play evaluator with style bias
+    play_style = getattr(args, "play_style", "balanced")
+    evaluator = PlayEvaluator(
+        knowledge_base_dir="knowledge_base/game_situations",
+        play_style=play_style,
+    )
+    report_gen = GameReportGenerator(play_style_name=play_style)
 
     annotator = GameAnnotator(
         show_boxes=True,
@@ -185,6 +195,16 @@ def run_game_analysis_mode(args, meta):
 
     print(f"  Total decision events: {len(analysis.events)}")
 
+    # Evaluate all events
+    if analysis.events:
+        print("  Evaluating decisions...")
+        evaluator.evaluate_all(analysis.events)
+        ratings = {"good": 0, "warning": 0, "poor": 0, "neutral": 0}
+        for e in analysis.events:
+            if e.evaluation:
+                ratings[e.evaluation.get("rating", "neutral")] += 1
+        print(f"  Ratings: {', '.join(f'{k}={v}' for k, v in ratings.items() if v > 0)}")
+
     # ── Pass 2: Render ────────────────────────────────────
     print("\nPass 2: Rendering annotated video...")
     render_start = time.time()
@@ -210,77 +230,36 @@ def run_game_analysis_mode(args, meta):
 
     # ── Report ────────────────────────────────────────────
     print()
-    print("=" * 60)
-    print("GAME ANALYSIS REPORT")
-    print("=" * 60)
-    summary = analysis.summarize()
+    text_report = report_gen.generate_text(analysis, args, meta)
+    print(text_report)
 
-    print(f"  Total frames: {summary['total_frames']}")
-    print(f"  Gameplay: {summary['gameplay_frames']} ({summary['gameplay_pct']:.0f}%)")
-    print(f"  Camera cuts: {summary['camera_cuts']}")
-    print()
-
-    if summary['zone_time']:
-        print("  ZONE TIME:")
-        for zone, secs in sorted(summary['zone_time'].items()):
-            print(f"    {zone}: {secs:.1f}s")
-        print()
-
-    if summary['total_events'] > 0:
-        print(f"  DECISION EVENTS: {summary['total_events']}")
-        for etype, count in summary['events_by_type'].items():
-            print(f"    {etype}: {count}")
-        print()
+    # Print event details to console
+    if analysis.events:
+        print("\nDECISION DETAILS:")
         for event in analysis.events:
             ts = f"{event.timestamp_sec:.1f}s"
-            print(f"  [{ts}] {event.event_type}: {event.decision_made} "
-                  f"(player #{event.player_id})")
-            if event.context:
-                for k, v in event.context.items():
-                    print(f"      {k}: {v}")
-    else:
-        print("  DECISION EVENTS: None detected in this clip")
+            rating = ""
+            if event.evaluation:
+                rating = f" => {event.evaluation.get('rating', '?').upper()}"
+            print(f"\n  [{ts}] {event.event_type}: {event.decision_made} "
+                  f"(player #{event.player_id}){rating}")
+            if event.evaluation:
+                if event.evaluation.get("reasoning"):
+                    print(f"    {event.evaluation['reasoning']}")
+                if event.evaluation.get("alternative"):
+                    print(f"    >> Suggestion: {event.evaluation['alternative']}")
+                if event.evaluation.get("style_note"):
+                    print(f"    >> {event.evaluation['style_note']}")
 
     print()
     print(f"  Total processing time: {total_time:.1f}s ({pass1_fps:.1f} fps tracking)")
     print(f"  Output saved to: {args.output}")
 
-    # Save JSON report
-    _save_game_report(analysis, args, meta)
+    # Save reports
+    print()
+    report_gen.save(analysis, args, meta)
 
     return analysis
 
 
-def _save_game_report(analysis: GameAnalysis, args, meta):
-    """Save game analysis report as JSON."""
-    import json
-
-    base = os.path.splitext(args.output)[0]
-    json_path = f"{base}_report.json"
-
-    report = {
-        "video": {
-            "input": args.input,
-            "resolution": f"{meta['width']}x{meta['height']}",
-            "fps": meta["fps"],
-            "duration_sec": meta["frame_count"] / meta["fps"],
-        },
-        "analysis": analysis.summarize(),
-        "events": [
-            {
-                "type": e.event_type,
-                "timestamp": e.timestamp_sec,
-                "frame": e.frame_idx,
-                "decision": e.decision_made,
-                "player_id": e.player_id,
-                "context": e.context,
-                "evaluation": e.evaluation,
-            }
-            for e in analysis.events
-        ],
-    }
-
-    with open(json_path, "w") as f:
-        json.dump(report, f, indent=2, default=str)
-
-    print(f"  Report saved to: {json_path}")
+    # _save_game_report removed — replaced by GameReportGenerator.save()
