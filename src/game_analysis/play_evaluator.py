@@ -29,10 +29,12 @@ PLAY_STYLES = {
         "display_name": "Possession Hockey",
         "description": "Favor keeping the puck, controlled plays, cycling",
         "biases": {
-            # Decision type -> preferred options with bonus/penalty
             "shot_vs_pass": {"pass": 0.15, "shot": 0.0, "dump": -0.2},
             "zone_entry": {"carry": 0.2, "pass_in": 0.1, "dump": -0.3},
             "breakout": {"carry": 0.15, "direct_pass": 0.1, "rim": -0.1, "chip": -0.2},
+            "odd_man_rush": {"pass": 0.1, "shot": 0.0, "deke": -0.1},
+            "forecheck": {"moderate": 0.1, "aggressive": -0.05, "passive": -0.1},
+            "defensive_play": {"contain": 0.1, "gap_close": 0.05, "pinch": -0.15},
         },
     },
     "physical": {
@@ -42,6 +44,9 @@ PLAY_STYLES = {
             "shot_vs_pass": {"shot": 0.15, "dump": 0.1, "pass": -0.1},
             "zone_entry": {"dump": 0.2, "carry": 0.0, "pass_in": -0.1},
             "breakout": {"rim": 0.15, "chip": 0.1, "carry": -0.1, "direct_pass": -0.05},
+            "odd_man_rush": {"shot": 0.1, "deke": 0.05, "pass": -0.05},
+            "forecheck": {"aggressive": 0.2, "moderate": 0.0, "passive": -0.2},
+            "defensive_play": {"gap_close": 0.15, "pinch": 0.1, "contain": -0.1},
         },
     },
     "speed": {
@@ -51,6 +56,9 @@ PLAY_STYLES = {
             "shot_vs_pass": {"shot": 0.1, "pass": 0.1, "dump": -0.15},
             "zone_entry": {"carry": 0.15, "pass_in": 0.15, "dump": -0.1},
             "breakout": {"direct_pass": 0.2, "carry": 0.1, "rim": -0.1, "chip": -0.15},
+            "odd_man_rush": {"shot": 0.1, "pass": 0.1, "deke": -0.1},
+            "forecheck": {"aggressive": 0.1, "moderate": 0.05, "passive": -0.15},
+            "defensive_play": {"gap_close": 0.1, "contain": 0.0, "pinch": -0.1},
         },
     },
     "defensive": {
@@ -60,6 +68,9 @@ PLAY_STYLES = {
             "shot_vs_pass": {"shot": 0.0, "dump": 0.1, "pass": -0.1},
             "zone_entry": {"dump": 0.15, "carry": -0.1, "pass_in": -0.05},
             "breakout": {"chip": 0.2, "rim": 0.15, "carry": -0.15, "direct_pass": -0.1},
+            "odd_man_rush": {"shot": 0.1, "pass": -0.05, "deke": -0.15},
+            "forecheck": {"passive": 0.15, "moderate": 0.05, "aggressive": -0.15},
+            "defensive_play": {"contain": 0.15, "gap_close": 0.1, "pinch": -0.2},
         },
     },
 }
@@ -272,6 +283,62 @@ class PlayEvaluator:
                 evaluation["alternative"] = "Consider quick pass or rim to relieve pressure"
             elif decision == "chip" and success:
                 evaluation["reasoning"] += " (chip worked but risky — consider controlled options)"
+
+        elif event.event_type == "odd_man_rush":
+            rush_type = ctx.get("rush_type", "unknown")
+            defenders = ctx.get("defenders_back", 0)
+
+            if decision == "shot":
+                # Game theory: shoot 75-82% of the time
+                evaluation["score"] = 0.75
+                evaluation["reasoning"] = f"{rush_type} — shot is correct 75-82% of the time per game theory"
+            elif decision == "pass":
+                # Pass creates highest xG when defender plays shot, but risky
+                evaluation["score"] = 0.6
+                evaluation["reasoning"] = f"{rush_type} — pass creates highest xG (0.214) when defender plays shot"
+                if defenders <= 1:
+                    evaluation["score"] = 0.7
+                    evaluation["reasoning"] += " — good read with only one defender back"
+            elif decision == "deke":
+                evaluation["score"] = 0.35
+                evaluation["reasoning"] = f"{rush_type} — deke is low-percentage on odd-man rushes"
+                evaluation["alternative"] = "Shoot or pass — dekes waste the numbers advantage"
+
+        elif event.event_type == "forecheck":
+            pressure = ctx.get("pressure_distance", 0)
+
+            if decision == "aggressive":
+                evaluation["score"] = 0.7
+                evaluation["reasoning"] = "Aggressive forecheck — creating pressure"
+                if ctx.get("num_players_pressuring", 0) >= 3:
+                    evaluation["score"] = 0.5
+                    evaluation["reasoning"] = "All forwards deep — no safety valve, risk of odd-man rush"
+                    evaluation["alternative"] = "Keep F3 high as safety — never all three forwards deep"
+            elif decision == "moderate":
+                evaluation["score"] = 0.65
+                evaluation["reasoning"] = "Balanced forecheck — pressure with coverage"
+            elif decision == "passive":
+                evaluation["score"] = 0.5
+                evaluation["reasoning"] = "Passive forecheck — giving opponent free exits"
+                evaluation["alternative"] = "Consider more pressure unless protecting a lead"
+
+        elif event.event_type == "defensive_play":
+            gap = ctx.get("gap_distance", 0)
+
+            if decision == "gap_close":
+                evaluation["score"] = 0.75
+                evaluation["reasoning"] = "Closed the gap — forcing the attacker to make a decision"
+            elif decision == "contain":
+                evaluation["score"] = 0.6
+                evaluation["reasoning"] = "Contained the play — waiting for support"
+                if gap > 2.0:
+                    evaluation["score"] = 0.4
+                    evaluation["reasoning"] = "Gap too wide — attacker has too much time and space"
+                    evaluation["alternative"] = "Close the gap to 4-6 feet — do not back up to the net"
+            elif decision == "pinch":
+                evaluation["score"] = 0.45
+                evaluation["reasoning"] = "Pinched aggressively — high-risk play"
+                evaluation["alternative"] = "Pinching risks odd-man rush if you do not win the puck"
 
         return evaluation
 

@@ -1,0 +1,59 @@
+situation:
+  name: power_play
+  display_name: "Power Play Decision"
+  description: "Shot selection, puck movement, and formation decisions on the power play"
+
+  # Statistical backing:
+  # - 87% of PP goals originate inside the top of the circles (slot)
+  # - Only 13% come from the point
+  # - One-timers: 9.0% scoring rate vs 7.0% regular shots
+  # - Top PP teams: 33% of goals from one-timers, bottom teams 26%
+  # - 75% of PP goals travel through the royal road (middle seam)
+  # - 75% of PP goals feature net-front traffic
+  # - 60%+ of PP goals come from structured setups, not chaos
+  # - Carry-ins generate 0.56-0.70 shots per entry (~66%)
+  # - Dump-ins generate shots only ~29% of the time
+
+  checks:
+    shooting_location:
+      display_name: "Shot Location"
+      metric: distance_to_goal
+      # Closer to goal = higher percentage shot
+      good_range: [0.0, 2.0]
+      warning_range: [0.0, 3.5]
+      feedback:
+        good: "Shot from high-danger area — 87% of PP goals come from inside the circles"
+        warning: "Shot from mid-range — look to get closer or find a one-timer"
+        poor: "Point shot with no traffic — only 13% of PP goals come from outside the circles"
+
+    net_front_traffic:
+      display_name: "Net-Front Presence"
+      metric: players_near_goal
+      # More players near the goal = better screen/tip opportunities
+      good_range: [1, 5]
+      warning_range: [0, 5]
+      feedback:
+        good: "Net-front traffic present — 75% of PP goals feature traffic in front"
+        warning: "No net-front presence — point shots without a screen are easily saved"
+        poor: "Empty net-front — get a body there for screens and deflections"
+
+  feedback:
+    shot: "Took a shot on the power play"
+    pass: "Moved the puck to create a better opportunity"
+    one_timer: "Set up a one-timer opportunity"
+
+  alternatives:
+    shot: "If no traffic in front and shooting from the point, the puck is not getting through — move it"
+    pass: "Quick puck movement is good but do not pass up a clean look from the slot"
+
+  coaching_notes:
+    - "All passes and shots should be hard and accurate — soft passes kill power plays"
+    - "Keep puck high until a lane opens down low or in the slot"
+    - "Quick puck movement — do not let defenders reset their positioning"
+    - "75% of PP goals travel through the royal road (cross-seam passes)"
+    - "One-timers score at 9% vs 7% for regular shots — set them up"
+    - "Match player handedness to off-wing (right-hander on left side, left on right)"
+    - "Umbrella (1-3-1): best for skilled teams, quick cross-ice movement"
+    - "Overload: best for teams with net-front presence, generates rebounds"
+    - "Carry-ins on the PP generate 2.3x more shots than dump-ins"
+    - "Top 8 PP teams averaged 41 off-pass goals vs bottom 8 teams' 26"

@@ -1,0 +1,55 @@
+situation:
+  name: line_change
+  display_name: "Line Change Decision"
+  description: "When to change lines and shift length management"
+
+  # Statistical backing:
+  # - Optimal forward shift: 35-45 seconds
+  # - Optimal D-man shift: 30-34 seconds
+  # - Beyond 60s: 25%+ performance drop
+  # - Work-to-rest ratio target: 1:3 (45s shift = 135s rest)
+  # - Below 1:2 ratio: measurable performance decline
+
+  checks:
+    shift_length:
+      display_name: "Shift Length"
+      metric: shift_length_sec
+      # Optimal shift length in seconds
+      good_range: [25, 50]
+      warning_range: [15, 60]
+      feedback:
+        good: "Good shift length — fresh legs for maximum performance"
+        warning: "Shift getting long — performance declining"
+        poor: "Way too long on the ice — 25%+ performance drop beyond 60 seconds"
+
+    change_safety:
+      display_name: "Change Safety"
+      metric: change_zone_safety
+      # 1 = safe to change, 0 = dangerous
+      good_range: [0.7, 1.0]
+      warning_range: [0.3, 1.0]
+      feedback:
+        good: "Safe change — puck in opponent zone or team has control"
+        warning: "Risky change — make sure you are not leaving teammates short"
+        poor: "Dangerous change — opponent transitioning, do NOT change now"
+
+  feedback:
+    safe_change: "Line change at an appropriate time"
+    risky_change: "Changed at a questionable time"
+    too_long: "Stayed on too long without changing"
+
+  alternatives:
+    risky_change: "Wait for puck to be in the opponent zone or a whistle before changing"
+    too_long: "Get off the ice — performance drops significantly beyond 45 seconds for forwards, 34 for D"
+
+  coaching_notes:
+    - "Optimal forward shift: 35-45 seconds. Beyond 45s performance drops significantly"
+    - "Optimal D-man shift: 30-34 seconds. Beyond 34s steep decline"
+    - "NEVER exceed 60 seconds — 25%+ performance drop"
+    - "Work-to-rest ratio target: 1:3 (45s shift needs 135s / 2:15 rest)"
+    - "Safe to change: puck in opponent zone, team has control, after a whistle"
+    - "Dangerous to change: puck in your zone, during a backcheck, opponent transitioning"
+    - "91% of coaches prefer players jumping over boards (not using the door)"
+    - "Never decelerate before reaching the bench — sprint to the bench"
+    - "D-men sit in middle of bench after shifts; fresh forwards near coaches"
+    - "Too many men penalty: mostly caused by turnovers during the change"

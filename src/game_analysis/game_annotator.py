@@ -22,6 +22,12 @@ CLASS_COLORS = {
     "goal": (200, 200, 200),
 }
 
+# Team-specific colors (BGR)
+TEAM_COLORS = {
+    "team_a": (255, 120, 50),     # Blue
+    "team_b": (60, 60, 255),      # Red
+}
+
 ZONE_COLORS = {
     "offensive": (0, 100, 255),   # Orange
     "neutral": (200, 200, 200),   # Gray
@@ -54,6 +60,11 @@ class GameAnnotator:
         self.show_rink_landmarks = show_rink_landmarks
         self.box_thickness = box_thickness
         self.font = cv2.FONT_HERSHEY_SIMPLEX
+        self._team_assignments: dict = {}  # track_id -> "team_a" | "team_b"
+
+    def set_team_assignments(self, assignments: dict):
+        """Update the current team assignment map (track_id -> team label)."""
+        self._team_assignments = assignments
 
     def render(
         self,
@@ -109,7 +120,12 @@ class GameAnnotator:
                 if not self.show_rink_landmarks:
                     continue
 
-            color = CLASS_COLORS.get(obj.class_name, (200, 200, 200))
+            # Use team color for players when available
+            team = self._team_assignments.get(obj.track_id)
+            if obj.class_name == "player" and team is not None:
+                color = TEAM_COLORS.get(team, (200, 200, 200))
+            else:
+                color = CLASS_COLORS.get(obj.class_name, (200, 200, 200))
             x1, y1, x2, y2 = [int(v) for v in obj.bbox]
 
             # Bounding box

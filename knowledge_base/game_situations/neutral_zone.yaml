@@ -1,0 +1,52 @@
+situation:
+  name: neutral_zone
+  display_name: "Neutral Zone Transition"
+  description: "Decisions in the neutral zone — stretch pass, regroup, or attack"
+
+  # Statistical backing:
+  # - Teams that regroup retain possession 65% longer than dump-and-chase
+  # - 2+ passes in NZ before attacking increases OZ success by 30-40%
+  # - Stretch pass should be first option (creates odd-man rushes)
+  # - Carry-ins generate ~2x the shot attempts of dump-ins
+
+  checks:
+    transition_speed:
+      display_name: "Transition Speed"
+      metric: transition_speed
+      # Faster transitions create more opportunities
+      good_range: [5.0, 50.0]
+      warning_range: [2.0, 60.0]
+      feedback:
+        good: "Good speed through the neutral zone — attacking with pace"
+        warning: "Transition speed is moderate — look to push the pace"
+        poor: "Too slow through the neutral zone — defense has time to set up"
+
+    passes_before_entry:
+      display_name: "Puck Movement"
+      metric: nz_passes
+      # More passes = better puck movement (up to a point)
+      good_range: [1, 4]
+      warning_range: [0, 5]
+      feedback:
+        good: "Good puck movement through the NZ — 2+ passes increases OZ success by 30-40%"
+        warning: "Consider more lateral/diagonal passing before attacking"
+        poor: "Forcing the play without moving the puck — easy to defend"
+
+  feedback:
+    stretch_pass: "Stretch pass to attack quickly"
+    regroup: "Regrouped to organize the attack"
+    rush: "Rushed through the neutral zone with speed"
+
+  alternatives:
+    stretch_pass: "Stretch pass is highest reward but risky if intercepted — read the defensive setup first"
+    regroup: "Regrouping retains possession 65% longer — correct when defenders are set"
+    rush: "Rushing with speed is effective but make sure support is coming"
+
+  coaching_notes:
+    - "Read the defensive setup before committing to entry method"
+    - "If defenders are set at the blue line, regroup — do not force entries"
+    - "Lateral and diagonal passes are more effective than north-south passing"
+    - "Speed through the NZ with purpose — do not coast"
+    - "Stretch pass should be first option — speed in transition creates odd-man rushes"
+    - "2+ passes before zone entry increases offensive zone success by 30-40%"
+    - "Teams that regroup retain possession 65% longer than dump-and-chase"

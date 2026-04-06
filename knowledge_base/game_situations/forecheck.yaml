@@ -1,0 +1,51 @@
+situation:
+  name: forecheck
+  display_name: "Forechecking Decision"
+  description: "How aggressively to pressure the opponent in their zone"
+
+  # Systems reference:
+  # - 2-1-2: Most aggressive (2F pressure, 1F high, 2D back)
+  # - 1-2-2: Moderate (1F pressure, 2F high, 2D back)
+  # - 1-3-1: Trap/passive (1F pressure, 3 at blueline, 1 at red)
+  # - 1-4: Ultra-conservative (1F in, 4 back)
+
+  checks:
+    pressure_distance:
+      display_name: "Forecheck Pressure"
+      metric: pressure_distance
+      # Closer pressure = more aggressive (in pixels, normalized)
+      good_range: [0.0, 1.5]
+      warning_range: [0.0, 2.5]
+      feedback:
+        good: "Good pressure on the puck carrier — forcing a decision"
+        warning: "Moderate pressure — could be tighter"
+        poor: "Too far from puck carrier — no pressure, easy breakout for opponent"
+
+    num_forecheckers:
+      display_name: "Forechecking Commitment"
+      metric: num_players_pressuring
+      # More players pressuring = more aggressive
+      good_range: [1, 3]
+      warning_range: [1, 4]
+      feedback:
+        good: "Right number of players committed to the forecheck"
+        warning: "Check commitment level — too many risks odd-man rush, too few gives free breakout"
+        poor: "Forechecking commitment does not match the game situation"
+
+  feedback:
+    aggressive: "Aggressive forecheck — multiple players pressuring deep"
+    moderate: "Moderate forecheck — balanced pressure and coverage"
+    passive: "Passive forecheck — sitting back, contain style"
+
+  alternatives:
+    aggressive: "Aggressive forecheck works when trailing or against weak puck-moving D — but risks odd-man rushes if you do not win the puck"
+    passive: "Passive forecheck protects the lead but gives opponent free exits — consider more pressure if you need a goal"
+
+  coaching_notes:
+    - "Use 2-1-2 when: trailing, opponent D panics under pressure, fresh legs, need momentum"
+    - "Use 1-2-2/trap when: protecting lead, opponent transitions quickly, late in game, fatigued"
+    - "F1 angles puck carrier to boards — never let them go up the middle"
+    - "F2 attacks aggressively in 2-1-2, sits higher in 1-2-2"
+    - "F3 is the safety valve — NEVER all three forwards go deep"
+    - "Common mistake: forechecking aggressively when fatigued — leads to odd-man rushes"
+    - "Read the game situation — aggressive forecheck when protecting a lead is a coaching error"

@@ -1,0 +1,56 @@
+situation:
+  name: defensive_play
+  display_name: "Defensive Play Decision"
+  description: "Gap control, body vs puck, and defensive positioning decisions"
+
+  # Gap control guidelines:
+  # - Offensive blue line: 3 stick-lengths
+  # - Red line: 2 stick-lengths
+  # - Defensive blue line: 1 stick-length / body contact
+  # - In zone 1-on-1: 4-6 feet optimal
+  # - Modern philosophy: stick-on-puck preferred over big hits
+
+  checks:
+    gap_distance:
+      display_name: "Gap Control"
+      metric: gap_distance
+      # Normalized distance. Lower = tighter gap = generally better
+      good_range: [0.3, 1.2]
+      warning_range: [0.1, 2.0]
+      feedback:
+        good: "Good gap — close enough to pressure, far enough to react"
+        warning: "Gap could be tighter — attacker has too much time and space"
+        poor: "Gap is too wide — attacker can walk right through"
+
+    closing_speed:
+      display_name: "Closing Speed"
+      metric: closing_speed
+      # How fast the defender is closing the gap (positive = closing)
+      good_range: [0.5, 10.0]
+      warning_range: [0.0, 15.0]
+      feedback:
+        good: "Closing on the attacker with good timing"
+        warning: "Not closing fast enough — attacker building speed"
+        poor: "Backing up or static — giving the attacker free ice"
+
+  feedback:
+    gap_close: "Defender closed the gap aggressively"
+    contain: "Defender maintained gap and contained the play"
+    pinch: "Defender pinched aggressively"
+
+  alternatives:
+    gap_close: "Closing the gap is correct when you can force the play to the outside — avoid overcommitting through the middle"
+    contain: "Containing works when waiting for support — but do not back up all the way to the net"
+    pinch: "Pinching is high-risk — only effective if you win the puck, turnover leads to odd-man rush"
+
+  coaching_notes:
+    - "Modern defense: stick-on-puck preferred over big hits — play the puck first"
+    - "At the blue line: even forcing a direction change or delay is valuable (forces offside)"
+    - "Pivot and skate forwards to angle attackers — never just back up into the zone"
+    - "Priority: defend the middle of the ice, force play to the outside"
+    - "Stay between puck and net at ALL times"
+    - "Keep stick on the ice to intercept passes through the slot"
+    - "Optimal gap in zone: 4-6 feet for 1-on-1 situations"
+    - "Common mistake: trying for big hits at the blue line and getting beaten wide"
+    - "Common mistake: backing off to the net instead of engaging up-ice"
+    - "Head on a swivel, inside shoulder in control"

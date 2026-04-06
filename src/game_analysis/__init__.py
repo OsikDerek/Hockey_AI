@@ -21,6 +21,7 @@ from .broadcast_filter import BroadcastFilter
 from .possession_detector import PossessionDetector
 from .play_evaluator import PlayEvaluator
 from .game_annotator import GameAnnotator
+from .team_classifier import TeamClassifier
 from .game_report import GameReportGenerator
 from .decisions import DECISION_REGISTRY
 
@@ -82,6 +83,8 @@ def run_game_analysis_mode(args, meta):
         show_ids=True,
     )
 
+    team_classifier = TeamClassifier(warmup_frames=30)
+
     # Determine output path
     if args.output is None:
         base = os.path.splitext(os.path.basename(args.input))[0]
@@ -100,6 +103,7 @@ def run_game_analysis_mode(args, meta):
     frames_processed = 0
     analysis = GameAnalysis()
     frame_data = []  # Store frames for pass 2
+    team_data = []   # Store team assignments per frame for pass 2
 
     for frame_idx, frame in frame_generator(args.input):
         # Count game objects from previous frame for broadcast filter
@@ -129,6 +133,12 @@ def run_game_analysis_mode(args, meta):
         # Possession detection
         possession_id = possession_detector.update(puck, players)
 
+        # Team classification
+        if is_gameplay:
+            team_assignments = team_classifier.update(frame, players)
+        else:
+            team_assignments = {}
+
         # Build frame context
         ctx = FrameContext(
             frame_idx=frame_idx,
@@ -152,6 +162,7 @@ def run_game_analysis_mode(args, meta):
 
         analysis.frame_contexts.append(ctx)
         frame_data.append(frame)
+        team_data.append(team_assignments)
         frames_processed += 1
 
         # Track stats
@@ -182,6 +193,14 @@ def run_game_analysis_mode(args, meta):
     print(f"  Gameplay frames: {analysis.gameplay_frames}/{analysis.total_frames} "
           f"({analysis.gameplay_frames / max(analysis.total_frames, 1) * 100:.0f}%)")
     print(f"  Camera cuts: {analysis.camera_cuts}")
+
+    # Team classification summary
+    team_summary = team_classifier.summary()
+    if team_summary["is_ready"]:
+        print(f"  Teams: A={team_summary['team_a_count']} players, "
+              f"B={team_summary['team_b_count']} players")
+    else:
+        print("  Teams: not enough data to classify")
 
     # ── Decision Analysis ─────────────────────────────────
     print("\nAnalyzing decisions...")
@@ -214,6 +233,7 @@ def run_game_analysis_mode(args, meta):
     with video_writer(args.output, fps=meta["fps"], width=out_w, height=out_h) as writer:
         for i, (frame, ctx) in enumerate(zip(frame_data, analysis.frame_contexts)):
             events = analysis.events_at_frame(i)
+            annotator.set_team_assignments(team_data[i])
             annotated = annotator.render(frame, ctx, events if events else None)
 
             # Ensure correct dimensions

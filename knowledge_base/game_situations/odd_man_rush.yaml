@@ -1,0 +1,56 @@
+situation:
+  name: odd_man_rush
+  display_name: "Odd-Man Rush Decision"
+  description: "2-on-1, 3-on-2, and breakaway decisions — shoot, pass, or deke"
+
+  # Statistical backing:
+  # - 2-on-1 produces a goal 22% of the time (Stathletes)
+  # - Game theory optimal: shoot 75-82%, pass 18-25%
+  # - Shot with last pass in OZ: 26.8% conversion
+  # - Shot with last pass outside OZ: 14.2% conversion
+  # - Pass when defender plays shot: 0.214 xG (highest outcome)
+  # - Shoot when defender plays pass: 0.142 xG
+
+  checks:
+    rush_type:
+      display_name: "Rush Type"
+      metric: rush_type_advantage
+      # More attackers vs defenders = better opportunity
+      good_range: [2, 5]
+      warning_range: [1, 5]
+      feedback:
+        good: "Clear numbers advantage — high-danger opportunity"
+        warning: "Slight advantage — need to execute well"
+        poor: "No real advantage — this is not an odd-man rush"
+
+    defenders_back:
+      display_name: "Defenders Back"
+      metric: defenders_back
+      # Fewer defenders = better rush
+      good_range: [0, 1]
+      warning_range: [0, 2]
+      feedback:
+        good: "Open ice — attack with speed and purpose"
+        warning: "Defenders recovering — make a quick decision"
+        poor: "Defense has recovered — rush opportunity lost"
+
+  feedback:
+    shot: "Chose to shoot on the rush"
+    pass: "Passed to teammate on the rush"
+    deke: "Attempted to deke the goalie/defender"
+
+  alternatives:
+    shot: "If defender is playing the pass, shooting is correct (75-82% of the time per game theory)"
+    pass: "Pass creates highest xG (0.214) when defender plays the shot — but only if completion rate is high"
+    deke: "Dekes are low-percentage on odd-man rushes — shoot or pass is almost always better"
+
+  coaching_notes:
+    - "Stay inside the dots — maintain your shooting threat at all times"
+    - "Read the defender: if they take away the lane, shoot. If they give space, consider pass"
+    - "Slow down to create decision-making time — rush does not mean rush your decision"
+    - "Game theory says shoot 75-82% of the time on a 2-on-1"
+    - "Early pass (before the circles) disrupts defender reads and forces goalie adjustments"
+    - "Non-puck carrier: open body position, front foot toe toward end boards, ready for one-timer"
+    - "3-on-2: maintain triangle formation, wide entry, move puck before the blue line"
+    - "Fake passes before shooting, fake shots to open passing lanes — dual threat"
+    - "NEVER skate into the corner — you eliminate your shooting angle"
