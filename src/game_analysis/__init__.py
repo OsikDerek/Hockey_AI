@@ -206,7 +206,16 @@ def run_game_analysis_mode(args, meta):
     # ── Decision Analysis ─────────────────────────────────
     print("\nAnalyzing decisions...")
     for name, det in decision_detectors.items():
-        events = det.analyze(fps=meta["fps"])
+        if name == "missed_opportunity":
+            # Missed opportunity detector needs extra data for lane calculation
+            events = det.analyze(
+                fps=meta["fps"],
+                frame_contexts=analysis.frame_contexts,
+                team_data=team_data,
+                frame_data=frame_data,
+            )
+        else:
+            events = det.analyze(fps=meta["fps"])
         analysis.events.extend(events)
         if events:
             print(f"  {name}: {len(events)} events detected")

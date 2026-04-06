@@ -1,0 +1,42 @@
+situation:
+  name: missed_opportunity
+  display_name: "Missed Opportunity"
+  description: "A high-percentage option opened up but was not acted on"
+
+  checks:
+    peak_pct:
+      display_name: "Opportunity Quality"
+      metric: peak_pct
+      # Higher peak = bigger missed opportunity
+      good_range: [0.0, 0.15]     # Not really a missed opportunity (low %)
+      warning_range: [0.0, 0.25]  # Moderate opportunity missed
+      feedback:
+        good: "Marginal opportunity — acceptable to not act"
+        warning: "Decent opportunity missed"
+        poor: "High-percentage opportunity missed — should have acted"
+
+    window_duration_frames:
+      display_name: "Window Duration"
+      metric: window_duration_frames
+      # Longer window = more time to see and act on it
+      good_range: [0, 5]          # Very brief — hard to react
+      warning_range: [0, 15]      # Had some time
+      feedback:
+        good: "Very brief window — difficult to react in time"
+        warning: "Had time to see the opportunity"
+        poor: "Extended window — plenty of time to make the play"
+
+  feedback:
+    missed_shot: "Open shooting lane was not exploited"
+    missed_pass: "Open passing lane to a teammate was not used"
+
+  alternatives:
+    missed_shot: "When the lane opens, release the puck quickly — hesitation lets the window close"
+    missed_pass: "Move the puck to the open teammate — the best play is the one that is available"
+
+  coaching_notes:
+    - "Great hockey sense means seeing opportunities BEFORE they fully open"
+    - "Quick release beats a perfect setup — if you wait for perfect, the window closes"
+    - "Head up, always scanning — you cannot pass to what you cannot see"
+    - "If a teammate is open for more than half a second, you should be moving the puck"
+    - "The best players make the play that is available, not the play they want"

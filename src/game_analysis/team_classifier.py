@@ -130,7 +130,7 @@ class TeamClassifier:
         if not self._is_warmed_up:
             # Accumulate samples
             self._warmup_samples.extend(features)
-            if self._frame_count >= self.warmup_frames:
+            if self._frame_count >= self.warmup_frames and len(self._warmup_samples) >= 8:
                 self._run_initial_clustering()
             return dict(self._team_map)
 
@@ -138,6 +138,11 @@ class TeamClassifier:
         for track_id, feat in features:
             label = self._classify(feat)
             self._accumulate_vote(track_id, label)
+
+        # Periodically re-cluster to adapt to camera/lighting changes
+        # (every 300 frames = ~10 seconds at 30fps)
+        if self._frame_count % 300 == 0 and len(self._warmup_samples) > 20:
+            self._recluster(features)
 
         return dict(self._team_map)
 
@@ -155,9 +160,11 @@ class TeamClassifier:
     def _extract_jersey_feature(self, frame: np.ndarray, obj: TrackedObject) -> Optional[np.ndarray]:
         """Extract a normalised HS histogram from the jersey region.
 
-        The jersey region is the middle 60% of the bounding box height
-        (dropping the top 20% for helmets and bottom 20% for skates) and
-        the full width.
+        Improved extraction:
+        - Uses the middle 50% vertically (top 25% = helmet, bottom 25% = skates/ice)
+        - Uses the center 70% horizontally (avoids arms at edges)
+        - Better ice/shadow masking with adaptive thresholds
+        - Applies Gaussian blur to reduce noise from broadcast compression
         """
         x1, y1, x2, y2 = [int(v) for v in obj.bbox]
         h_frame, w_frame = frame.shape[:2]
@@ -170,24 +177,36 @@ class TeamClassifier:
 
         bh = y2 - y1
         bw = x2 - x1
-        if bh < 10 or bw < 5:
+        if bh < 12 or bw < 8:
             return None
 
-        # Middle 60% vertically
-        top = y1 + int(bh * 0.20)
-        bot = y1 + int(bh * 0.80)
-        crop = frame[top:bot, x1:x2]
+        # Center 50% vertically (skip helmet and skates)
+        top = y1 + int(bh * 0.25)
+        bot = y1 + int(bh * 0.75)
+        # Center 70% horizontally (skip arm edges)
+        left = x1 + int(bw * 0.15)
+        right = x2 - int(bw * 0.15)
+        crop = frame[top:bot, left:right]
 
-        if crop.size == 0:
+        if crop.size == 0 or crop.shape[0] < 4 or crop.shape[1] < 4:
             return None
+
+        # Light blur to reduce compression artifacts
+        crop = cv2.GaussianBlur(crop, (3, 3), 0)
 
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
 
-        # Mask out very dark pixels (shadows / black equipment) and very
-        # bright near-white pixels (ice reflections).
+        # Better masking:
+        # - Exclude very dark (shadows, black equipment): V > 50
+        # - Exclude very bright/white (ice glare): V < 230
+        # - Require some saturation (avoid gray/white): S > 25
+        # - Also exclude very low saturation + high value (ice itself): not (S < 40 and V > 180)
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
-        mask = (sat > 30) & (val > 40) & (val < 240)
+        mask = (sat > 25) & (val > 50) & (val < 230)
+        # Extra: exclude ice-like pixels (low sat, high val)
+        ice_mask = (sat < 40) & (val > 180)
+        mask = mask & ~ice_mask
 
         if mask.sum() < self.min_jersey_pixels:
             return None
@@ -234,6 +253,18 @@ class TeamClassifier:
         # Build initial votes from warmup samples
         for tid, lab in zip(track_ids, labels):
             self._accumulate_vote(tid, int(lab))
+
+    def _recluster(self, recent_features):
+        """Periodically refine cluster centers with recent data."""
+        if not recent_features:
+            return
+        recent = np.array([f for _, f in recent_features])
+        # Blend recent data with existing centers (80% old, 20% new)
+        for i in range(len(self._centers)):
+            assigned = recent[np.array([self._classify(f) for f in recent]) == i]
+            if len(assigned) > 0:
+                new_center = assigned.mean(axis=0)
+                self._centers[i] = 0.8 * self._centers[i] + 0.2 * new_center
 
     def _classify(self, feature: np.ndarray) -> int:
         """Return cluster index (0 = team_a, 1 = team_b) for a feature."""

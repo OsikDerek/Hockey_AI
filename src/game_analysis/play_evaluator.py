@@ -340,6 +340,22 @@ class PlayEvaluator:
                 evaluation["reasoning"] = "Pinched aggressively — high-risk play"
                 evaluation["alternative"] = "Pinching risks odd-man rush if you do not win the puck"
 
+        elif event.event_type == "missed_opportunity":
+            opp_type = ctx.get("opportunity_type", "unknown")
+            peak_pct = ctx.get("peak_pct", 0)
+            description = ctx.get("description", "")
+            target_id = ctx.get("target_id")
+
+            # Missed opportunities are always rated as missed potential
+            evaluation["score"] = 0.25  # Low score = the player should have done something
+            evaluation["reasoning"] = description
+
+            if opp_type == "shot":
+                evaluation["alternative"] = f"Had a {peak_pct:.0%} shooting opportunity — should have released the puck"
+            elif opp_type == "pass":
+                target_str = f"#{target_id}" if target_id else "teammate"
+                evaluation["alternative"] = f"Had a {peak_pct:.0%} pass to {target_str} — should have moved the puck"
+
         return evaluation
 
     def _apply_style_bias(self, event: GameEvent, evaluation: dict) -> dict:

@@ -10,6 +10,7 @@ from .breakout import BreakoutDetector
 from .odd_man_rush import OddManRushDetector
 from .forecheck import ForecheckDetector
 from .defensive_play import DefensivePlayDetector
+from .missed_opportunity import MissedOpportunityDetector
 
 DECISION_REGISTRY = {
     "shot_vs_pass": ShotVsPassDetector,
@@ -18,4 +19,5 @@ DECISION_REGISTRY = {
     "odd_man_rush": OddManRushDetector,
     "forecheck": ForecheckDetector,
     "defensive_play": DefensivePlayDetector,
+    "missed_opportunity": MissedOpportunityDetector,
 }
