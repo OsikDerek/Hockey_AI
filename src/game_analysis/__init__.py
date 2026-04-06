@@ -20,6 +20,7 @@ from .zone_detector import ZoneDetector
 from .broadcast_filter import BroadcastFilter
 from .possession_detector import PossessionDetector
 from .play_evaluator import PlayEvaluator
+from .lane_calculator import LaneCalculator
 from .game_annotator import GameAnnotator
 from .team_classifier import TeamClassifier
 from .game_report import GameReportGenerator
@@ -224,24 +225,120 @@ def run_game_analysis_mode(args, meta):
                 ratings[e.evaluation.get("rating", "neutral")] += 1
         print(f"  Ratings: {', '.join(f'{k}={v}' for k, v in ratings.items() if v > 0)}")
 
-    # ── Pass 2: Render ────────────────────────────────────
-    print("\nPass 2: Rendering annotated video...")
+    # ── Build Event Timeline ─────────────────────────────
+    event_timeline = {}  # frame_idx -> phase_info
+    for event in analysis.events:
+        fs, fe, fi = event.frame_start, event.frame_end, event.frame_idx
+
+        # Approach: event_start to decision-5
+        for f in range(fs, max(fs, fi - 5)):
+            progress = (f - fs) / max(1, fi - 5 - fs)
+            event_timeline.setdefault(f, {
+                "phase": "approach", "event": event,
+                "alpha": 0.3 + 0.4 * progress,
+            })
+
+        # Slowdown: decision-5 to decision
+        for f in range(max(fs, fi - 5), fi):
+            event_timeline.setdefault(f, {
+                "phase": "slowdown", "event": event, "alpha": 0.8,
+            })
+
+        # Freeze: decision frame
+        event_timeline.setdefault(fi, {
+            "phase": "freeze", "event": event, "alpha": 1.0,
+        })
+
+        # Result: decision+1 to event_end
+        result_len = max(1, fe - fi)
+        for f in range(fi + 1, fe + 1):
+            fade = (f - fi) / result_len
+            event_timeline.setdefault(f, {
+                "phase": "result", "event": event,
+                "alpha": max(0.1, 0.8 - 0.7 * fade),
+            })
+
+    # ── Pass 2: Render with Coaching Overlays ─────────────
+    print("\nPass 2: Rendering annotated video with coaching overlays...")
     render_start = time.time()
 
     out_h, out_w = meta["height"], meta["width"]
+    fps = meta["fps"]
+    freeze_duration = 2.0  # seconds to hold on decision frame
 
-    with video_writer(args.output, fps=meta["fps"], width=out_w, height=out_h) as writer:
+    with video_writer(args.output, fps=fps, width=out_w, height=out_h) as writer:
         for i, (frame, ctx) in enumerate(zip(frame_data, analysis.frame_contexts)):
             events = analysis.events_at_frame(i)
             annotator.set_team_assignments(team_data[i])
-            annotated = annotator.render(frame, ctx, events if events else None)
+
+            phase_info = event_timeline.get(i)
+
+            # Split players into teams for lane calculation
+            carrier_id = ctx.possession_player_id
+            teammates, opponents = _split_teams(
+                ctx.players, carrier_id, team_data[i]
+            )
+
+            # Ambient connections (always-on when there's a carrier)
+            ambient = None
+            if carrier_id is not None and teammates:
+                carrier_obj = _find_player(ctx.players, carrier_id)
+                if carrier_obj:
+                    ambient = annotator.lane_calculator.calc_ambient_connections(
+                        carrier_obj, teammates, opponents, out_w, out_h
+                    )
+
+            if phase_info is not None and annotator.coaching_mode:
+                # Coaching mode: calculate full lanes
+                event = phase_info["event"]
+                eid = event.player_id or carrier_id
+                carrier_obj = _find_player(ctx.players, eid)
+
+                lane_data = None
+                if carrier_obj:
+                    # Re-split using event's player
+                    ev_teammates, ev_opponents = _split_teams(
+                        ctx.players, eid, team_data[i]
+                    )
+                    shooting = annotator.lane_calculator.calc_shooting_lane(
+                        carrier_obj,
+                        ctx.goalies[0] if ctx.goalies else None,
+                        ev_opponents, out_w, out_h,
+                    )
+                    passing = annotator.lane_calculator.calc_passing_lanes(
+                        carrier_obj, ev_teammates, ev_opponents, out_w, out_h,
+                    )
+                    lane_data = {"shooting": shooting, "passing": passing}
+
+                annotated = annotator.render_coaching(
+                    frame, ctx, events, phase_info, lane_data,
+                )
+            else:
+                # Standard mode with ambient connections
+                annotated = annotator.render(
+                    frame, ctx, events if events else None,
+                    ambient_connections=ambient,
+                )
 
             # Ensure correct dimensions
             ah, aw = annotated.shape[:2]
             if aw != out_w or ah != out_h:
                 annotated = cv2.resize(annotated, (out_w, out_h))
 
-            writer.write(annotated)
+            # Timing control
+            if phase_info is not None:
+                phase = phase_info["phase"]
+                if phase == "freeze":
+                    repeat = int(fps * freeze_duration)
+                elif phase == "slowdown":
+                    repeat = 2
+                else:
+                    repeat = 1
+            else:
+                repeat = 1
+
+            for _ in range(repeat):
+                writer.write(annotated)
 
     render_time = time.time() - render_start
     total_time = time.time() - start_time
@@ -282,4 +379,28 @@ def run_game_analysis_mode(args, meta):
     return analysis
 
 
-    # _save_game_report removed — replaced by GameReportGenerator.save()
+def _split_teams(players, carrier_id, team_assignments):
+    """Split players into teammates and opponents relative to the carrier."""
+    carrier_team = team_assignments.get(carrier_id)
+    teammates = []
+    opponents = []
+    for p in players:
+        if p.track_id == carrier_id:
+            continue
+        p_team = team_assignments.get(p.track_id)
+        if carrier_team and p_team == carrier_team:
+            teammates.append(p)
+        elif carrier_team and p_team and p_team != carrier_team:
+            opponents.append(p)
+        else:
+            # Unknown team — treat as opponent (safer)
+            opponents.append(p)
+    return teammates, opponents
+
+
+def _find_player(players, track_id):
+    """Find a player by track_id."""
+    for p in players:
+        if p.track_id == track_id:
+            return p
+    return None
