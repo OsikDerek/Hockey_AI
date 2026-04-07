@@ -21,6 +21,7 @@ from .broadcast_filter import BroadcastFilter
 from .possession_detector import PossessionDetector
 from .play_evaluator import PlayEvaluator
 from .lane_calculator import LaneCalculator
+from .space_detector import SpaceDetector
 from .game_annotator import GameAnnotator
 from .team_classifier import TeamClassifier
 from .game_report import GameReportGenerator
@@ -290,32 +291,41 @@ def run_game_analysis_mode(args, meta):
 
             # Ambient connections (always-on when there's a carrier)
             ambient = None
-            if carrier_id is not None and teammates:
+            carrier_obj = None
+            if carrier_id is not None:
                 carrier_obj = _find_player(ctx.players, carrier_id)
-                if carrier_obj:
+                if carrier_obj and teammates:
                     ambient = annotator.lane_calculator.calc_ambient_connections(
                         carrier_obj, teammates, opponents, out_w, out_h
                     )
+
+            # Open space detection (always-on, subtle)
+            open_spaces = None
+            if ctx.is_gameplay and len(ctx.players) >= 3:
+                open_spaces = annotator.space_detector.find_open_spaces(
+                    ctx.players, carrier_obj, ctx.goalies,
+                    out_w, out_h,
+                    teammates=teammates, opponents=opponents,
+                )
 
             if phase_info is not None and annotator.coaching_mode:
                 # Coaching mode: calculate full lanes
                 event = phase_info["event"]
                 eid = event.player_id or carrier_id
-                carrier_obj = _find_player(ctx.players, eid)
+                ev_carrier = _find_player(ctx.players, eid)
 
                 lane_data = None
-                if carrier_obj:
-                    # Re-split using event's player
+                if ev_carrier:
                     ev_teammates, ev_opponents = _split_teams(
                         ctx.players, eid, team_data[i]
                     )
                     shooting = annotator.lane_calculator.calc_shooting_lane(
-                        carrier_obj,
+                        ev_carrier,
                         ctx.goalies[0] if ctx.goalies else None,
                         ev_opponents, out_w, out_h,
                     )
                     passing = annotator.lane_calculator.calc_passing_lanes(
-                        carrier_obj, ev_teammates, ev_opponents, out_w, out_h,
+                        ev_carrier, ev_teammates, ev_opponents, out_w, out_h,
                     )
                     lane_data = {"shooting": shooting, "passing": passing}
 
@@ -323,10 +333,11 @@ def run_game_analysis_mode(args, meta):
                     frame, ctx, events, phase_info, lane_data,
                 )
             else:
-                # Standard mode with ambient connections
+                # Standard mode with ambient connections + open space
                 annotated = annotator.render(
                     frame, ctx, events if events else None,
                     ambient_connections=ambient,
+                    open_spaces=open_spaces,
                 )
 
             # Ensure correct dimensions
@@ -389,21 +400,47 @@ def run_game_analysis_mode(args, meta):
 
 
 def _split_teams(players, carrier_id, team_assignments):
-    """Split players into teammates and opponents relative to the carrier."""
+    """Split players into teammates and opponents relative to the carrier.
+
+    When team classification is unreliable or unavailable, uses a
+    conservative approach: only classify as teammate if we have HIGH
+    confidence in the team assignment (same team as carrier with both
+    assigned). Everything else goes to opponents. This prevents
+    drawing passing lanes to opposing players.
+    """
     carrier_team = team_assignments.get(carrier_id)
     teammates = []
     opponents = []
+
+    # Count how many players are assigned to each team
+    team_counts = {}
+    for p in players:
+        t = team_assignments.get(p.track_id)
+        if t:
+            team_counts[t] = team_counts.get(t, 0) + 1
+
+    # Check if team classification looks reasonable
+    # (each team should have roughly similar player counts)
+    classification_reliable = False
+    if carrier_team and len(team_counts) == 2:
+        counts = list(team_counts.values())
+        if min(counts) >= 2:  # At least 2 players per team
+            classification_reliable = True
+
     for p in players:
         if p.track_id == carrier_id:
             continue
         p_team = team_assignments.get(p.track_id)
-        if carrier_team and p_team == carrier_team:
+
+        if classification_reliable and carrier_team and p_team == carrier_team:
             teammates.append(p)
-        elif carrier_team and p_team and p_team != carrier_team:
+        elif classification_reliable and carrier_team and p_team and p_team != carrier_team:
             opponents.append(p)
         else:
-            # Unknown team — treat as opponent (safer)
+            # When classification is unreliable, DON'T draw lanes to anyone
+            # Treat all as opponents (no passing lanes = better than wrong lanes)
             opponents.append(p)
+
     return teammates, opponents
 
 

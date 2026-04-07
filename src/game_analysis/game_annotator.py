@@ -10,6 +10,7 @@ from typing import Optional
 
 from .game_context import FrameContext, GameEvent
 from .lane_calculator import LaneCalculator
+from .space_detector import SpaceDetector
 
 
 # Colors by class (BGR)
@@ -77,6 +78,7 @@ class GameAnnotator:
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self._team_assignments = {}
         self.lane_calculator = LaneCalculator()
+        self.space_detector = SpaceDetector()
 
     def set_team_assignments(self, assignments: dict):
         """Update the current team assignment map."""
@@ -88,6 +90,7 @@ class GameAnnotator:
         context: FrameContext,
         events: Optional[list] = None,
         ambient_connections: Optional[list] = None,
+        open_spaces: Optional[list] = None,
     ) -> np.ndarray:
         """Render standard overlays (no coaching lanes).
 
@@ -96,6 +99,7 @@ class GameAnnotator:
             context: FrameContext with tracked objects.
             events: Active GameEvents at this frame.
             ambient_connections: Subtle teammate connections (always-on).
+            open_spaces: List of open space dicts from SpaceDetector.
         """
         annotated = frame.copy()
 
@@ -105,6 +109,10 @@ class GameAnnotator:
 
         if context.is_camera_cut:
             self._draw_camera_cut(annotated)
+
+        # Open space overlay (draw first so it's behind everything)
+        if open_spaces:
+            self._draw_open_spaces(annotated, open_spaces)
 
         if self.show_boxes:
             self._draw_objects(annotated, context)
@@ -272,6 +280,65 @@ class GameAnnotator:
             # Thin dashed line
             self._draw_dashed_line(overlay, pt1, pt2, color, thickness=1, dash_length=12)
         cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+
+    # ── Open Space Visualization ───────────────────────────
+
+    def _draw_open_spaces(self, frame, spaces):
+        """Draw open space regions as subtle colored overlays."""
+        overlay = frame.copy()
+
+        for space in spaces:
+            value = space["value"]
+            adjacent = space["adjacent_to_carrier"]
+            dangerous = space["in_dangerous_zone"]
+
+            # Color by value
+            if value == "high":
+                color = (0, 255, 100)     # Bright green
+                alpha = 0.20
+            elif value == "medium":
+                color = (0, 200, 200)     # Yellow-green
+                alpha = 0.12
+            else:
+                color = (180, 180, 180)   # Light gray
+                alpha = 0.06
+
+            # Brighter if adjacent to carrier
+            if adjacent:
+                alpha = min(alpha + 0.10, 0.30)
+
+            # Draw filled contour
+            cv2.drawContours(overlay, [space["contour"]], -1, color, -1)
+
+            # Border for high-value spaces
+            if value in ("high", "medium"):
+                cv2.drawContours(frame, [space["contour"]], -1, color, 2)
+
+            # Label for high-value spaces
+            if value == "high" and space.get("reasons"):
+                cx, cy = space["center"]
+                label = space["reasons"][0] if space["reasons"] else "Open"
+                if adjacent:
+                    label = "OPEN ICE"
+                elif dangerous:
+                    label = "OPEN SLOT"
+
+                sz = cv2.getTextSize(label, self.font, 0.45, 1)[0]
+                # Background pill
+                cv2.rectangle(
+                    frame,
+                    (cx - sz[0] // 2 - 4, cy - sz[1] // 2 - 4),
+                    (cx + sz[0] // 2 + 4, cy + sz[1] // 2 + 4),
+                    color, -1,
+                )
+                cv2.putText(
+                    frame, label,
+                    (cx - sz[0] // 2, cy + sz[1] // 2),
+                    self.font, 0.45, (0, 0, 0), 1, cv2.LINE_AA,
+                )
+
+        # Blend overlay
+        cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
 
     # ── Coaching Overlay Methods ──────────────────────────
 
