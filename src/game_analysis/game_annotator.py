@@ -402,73 +402,58 @@ class GameAnnotator:
     # ── Open Space Visualization ───────────────────────────
 
     def _draw_open_spaces(self, frame, spaces):
-        """Draw open space regions as visible colored overlays.
+        """Draw tactical gaps between defenders as discrete markers.
 
-        High-value spaces get a bold green tint with a glowing border.
-        Medium spaces get a lighter tint. Low spaces are barely visible.
-        Labels clearly mark the most important spaces.
+        Shows the seam/gap between two defenders with:
+        - A dashed line connecting the two defenders (showing the gap)
+        - A diamond marker at the midpoint
+        - A label if it's high value
+        No shading of large regions — just the specific exploitable gaps.
         """
-        overlay = frame.copy()
-
         for space in spaces:
             value = space["value"]
-            adjacent = space["adjacent_to_carrier"]
-            dangerous = space["in_dangerous_zone"]
+            cx, cy = int(space["center"][0]), int(space["center"][1])
 
-            # Color by value — brighter and more saturated
+            # Color by value
             if value == "high":
-                color = (0, 255, 80)      # Bright green
-                border_color = (0, 255, 120)
-                alpha = 0.30
+                color = (0, 255, 80)
+                marker_size = 14
             elif value == "medium":
-                color = (0, 200, 180)     # Teal-green
-                border_color = (0, 220, 200)
-                alpha = 0.18
+                color = (0, 200, 180)
+                marker_size = 10
             else:
-                color = (160, 180, 160)   # Subtle gray-green
-                border_color = None
-                alpha = 0.08
+                continue  # Don't show low-value gaps
 
-            # Boost if adjacent to carrier
-            if adjacent:
-                alpha = min(alpha + 0.12, 0.40)
+            # Draw dashed line between the two defenders forming the gap
+            if "defender_a" in space and "defender_b" in space:
+                da = tuple(int(v) for v in space["defender_a"])
+                db = tuple(int(v) for v in space["defender_b"])
+                self._draw_dashed_line(frame, da, db, color, thickness=1, dash_length=10)
 
-            # Draw filled contour on overlay
-            cv2.drawContours(overlay, [space["contour"]], -1, color, -1)
+            # Diamond marker at the gap center
+            pts = np.array([
+                [cx, cy - marker_size],
+                [cx + marker_size, cy],
+                [cx, cy + marker_size],
+                [cx - marker_size, cy],
+            ], dtype=np.int32)
+            cv2.fillPoly(frame, [pts], color)
+            cv2.polylines(frame, [pts], True, (255, 255, 255), 1, cv2.LINE_AA)
 
-            # Glowing border for high/medium (draw thick + thin for glow effect)
-            if border_color and value in ("high", "medium"):
-                cv2.drawContours(frame, [space["contour"]], -1, border_color, 4)
-                cv2.drawContours(frame, [space["contour"]], -1, (255, 255, 255), 1)
-
-            # Label for high-value and medium-adjacent spaces
-            show_label = (value == "high") or (value == "medium" and adjacent)
-            if show_label and space.get("reasons"):
-                cx, cy = space["center"]
-                label = space["reasons"][0] if space["reasons"] else "Open"
-                if adjacent:
+            # Label for high-value gaps
+            if value == "high" and space.get("reasons"):
+                label = space["reasons"][0] if space["reasons"] else "GAP"
+                if space.get("adjacent_to_carrier"):
                     label = "OPEN ICE"
-                elif dangerous:
-                    label = "OPEN SLOT"
+                elif space.get("in_dangerous_zone"):
+                    label = "SLOT GAP"
 
-                font_scale = 0.55 if value == "high" else 0.45
-                thickness = 2 if value == "high" else 1
-                sz = cv2.getTextSize(label, self.font, font_scale, thickness)[0]
-                # Background pill with rounded feel
-                pill_x1 = cx - sz[0] // 2 - 6
-                pill_y1 = cy - sz[1] // 2 - 6
-                pill_x2 = cx + sz[0] // 2 + 6
-                pill_y2 = cy + sz[1] // 2 + 6
-                cv2.rectangle(frame, (pill_x1, pill_y1), (pill_x2, pill_y2), color, -1)
-                cv2.rectangle(frame, (pill_x1, pill_y1), (pill_x2, pill_y2), (255, 255, 255), 1)
-                cv2.putText(
-                    frame, label,
-                    (cx - sz[0] // 2, cy + sz[1] // 2),
-                    self.font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA,
-                )
-
-        # Blend overlay — higher alpha for actual visibility
-        cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+                sz = cv2.getTextSize(label, self.font, 0.45, 1)[0]
+                tx = cx - sz[0] // 2
+                ty = cy - marker_size - 8
+                # Background
+                cv2.rectangle(frame, (tx - 3, ty - sz[1] - 3), (tx + sz[0] + 3, ty + 3), color, -1)
+                cv2.putText(frame, label, (tx, ty), self.font, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
 
     # ── Coaching Overlay Methods ──────────────────────────
 

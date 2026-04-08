@@ -1,13 +1,10 @@
-"""Goalie analysis — shot angles and open net visualization.
+"""Goalie analysis — sight lines from puck to net openings.
 
-Computes the shooting angle from the puck carrier to the goal,
-identifies which parts of the net the goalie is NOT covering,
-and visualizes open scoring spots.
+Draws rays from the puck position fanning out to the net edges/corners.
+Each ray is color-coded: green = clear path to net, red = goalie blocking.
+Shows what scoring options the shooter actually has.
 
-Works in two modes:
-1. Game mode: Shows shot angle + open net spots during gameplay
-2. Shootout mode: Detailed analysis of goalie positioning for
-   penalty shots / shootouts / breakaways
+Works for both game situations and shootout/penalty shot analysis.
 """
 
 import cv2
@@ -18,25 +15,28 @@ from .game_context import TrackedObject
 
 
 class GoalieAnalyzer:
-    """Analyze goalie positioning and find open net spots.
+    """Analyze goalie positioning via sight lines from puck to net.
 
-    Uses the goalie's bounding box as a proxy for their coverage area.
-    The net area is estimated from the goal detection or goalie position.
-    Open spots are areas of the net not covered by the goalie's body.
+    Casts rays from the puck to points along the net opening.
+    Each ray is checked against the goalie's bounding box to determine
+    if that path to the net is open or blocked.
     """
 
     def __init__(
         self,
-        net_width_ratio: float = 0.08,
-        net_height_ratio: float = 0.06,
+        net_width_ratio: float = 0.065,
+        net_height_ratio: float = 0.055,
+        num_rays: int = 9,
     ):
         """
         Args:
             net_width_ratio: Estimated net width as fraction of frame width.
             net_height_ratio: Estimated net height as fraction of frame height.
+            num_rays: Number of sight lines to cast across the net opening.
         """
         self.net_width_ratio = net_width_ratio
         self.net_height_ratio = net_height_ratio
+        self.num_rays = num_rays
 
     def analyze_shot(
         self,
@@ -46,110 +46,117 @@ class GoalieAnalyzer:
         frame_width: int,
         frame_height: int,
     ) -> Optional[dict]:
-        """Analyze the current shot opportunity.
+        """Analyze scoring options via sight lines.
 
         Returns dict with:
-            - shot_angle: Angle from carrier to goal in degrees
-            - goal_center: (x, y) estimated center of the net
-            - net_rect: (x1, y1, x2, y2) estimated net rectangle
-            - goalie_coverage: 0.0-1.0 how much of the net the goalie covers
-            - open_spots: list of {"position": str, "center": (x,y), "size": str}
-            - best_spot: the highest-value open spot
+            - rays: list of {target, blocked, label} for each sight line
+            - open_pct: percentage of net that's open
+            - best_target: the most open scoring spot
+            - shot_angle: angle from carrier to goal center
+            - goalie_coverage: fraction of rays blocked
         """
-        # Estimate goal/net position
+        # Determine goal center
         if goal_landmark is not None:
-            goal_center = goal_landmark.center
+            goal_center = np.array(goal_landmark.center)
         elif goalie is not None:
-            # Estimate goal behind the goalie
-            goal_center = goalie.center
+            goal_center = np.array(goalie.center)
         else:
             return None
 
         gx, gy = goal_center
+        puck_pos = np.array(carrier.center)
 
         # Estimate net rectangle
         net_w = frame_width * self.net_width_ratio
         net_h = frame_height * self.net_height_ratio
-        net_rect = (
-            gx - net_w / 2, gy - net_h / 2,
-            gx + net_w / 2, gy + net_h / 2,
-        )
 
-        # Shot angle from carrier to goal
-        cx, cy = carrier.center
-        dx = gx - cx
-        dy = gy - cy
+        # Generate target points along the net opening
+        # Fan across the net width and height to create a grid of targets
+        targets = []
+        labels = ["far high", "far mid", "far low",
+                  "center high", "center mid", "center low",
+                  "near high", "near mid", "near low"]
+
+        for col, x_frac in enumerate([0.15, 0.5, 0.85]):  # across net width
+            for row, y_frac in enumerate([0.15, 0.5, 0.85]):  # across net height
+                tx = gx - net_w / 2 + net_w * x_frac
+                ty = gy - net_h / 2 + net_h * y_frac
+                idx = col * 3 + row
+                label = labels[idx] if idx < len(labels) else f"spot_{idx}"
+                targets.append({"pos": (float(tx), float(ty)), "label": label})
+
+        # Check each ray against the goalie
+        rays = []
+        open_count = 0
+
+        for target in targets:
+            target_pos = np.array(target["pos"])
+            blocked = False
+
+            if goalie is not None:
+                blocked = self._ray_hits_goalie(puck_pos, target_pos, goalie)
+
+            rays.append({
+                "start": (float(puck_pos[0]), float(puck_pos[1])),
+                "end": target["pos"],
+                "blocked": blocked,
+                "label": target["label"],
+            })
+
+            if not blocked:
+                open_count += 1
+
+        # Stats
+        total_rays = len(rays)
+        open_pct = open_count / max(total_rays, 1)
+        goalie_coverage = 1.0 - open_pct
+
+        # Best target = first open ray (they're ordered: far high, far mid, etc.)
+        best_target = None
+        for r in rays:
+            if not r["blocked"]:
+                best_target = r
+                break
+
+        # Shot angle
+        dx = float(gx - puck_pos[0])
+        dy = float(gy - puck_pos[1])
         distance = np.sqrt(dx * dx + dy * dy)
-        shot_angle = np.degrees(np.arctan2(abs(dy), abs(dx)))
-
-        # Goalie coverage analysis
-        open_spots = []
-        goalie_coverage = 0.0
-        best_spot = None
-
-        if goalie is not None:
-            gx1, gy1, gx2, gy2 = goalie.bbox
-            goalie_cx = (gx1 + gx2) / 2
-            goalie_cy = (gy1 + gy2) / 2
-            goalie_w = gx2 - gx1
-            goalie_h = gy2 - gy1
-
-            # Coverage: how much of the net width does the goalie cover?
-            if net_w > 0:
-                goalie_coverage = min(1.0, goalie_w / net_w)
-
-            # Find open spots by checking 5 target zones on the net
-            # (glove high, glove low, blocker high, blocker low, five-hole)
-            net_x1, net_y1, net_x2, net_y2 = net_rect
-
-            targets = [
-                ("glove high", (net_x1 + net_w * 0.2, net_y1 + net_h * 0.2)),
-                ("glove low", (net_x1 + net_w * 0.2, net_y1 + net_h * 0.8)),
-                ("blocker high", (net_x1 + net_w * 0.8, net_y1 + net_h * 0.2)),
-                ("blocker low", (net_x1 + net_w * 0.8, net_y1 + net_h * 0.8)),
-                ("five hole", (goalie_cx, goalie_cy + goalie_h * 0.3)),
-            ]
-
-            for name, (tx, ty) in targets:
-                # Check if this spot is covered by the goalie bbox
-                inside_goalie = (gx1 <= tx <= gx2) and (gy1 <= ty <= gy2)
-
-                if not inside_goalie:
-                    # Calculate how far this spot is from the goalie center
-                    spot_dist = np.sqrt((tx - goalie_cx) ** 2 + (ty - goalie_cy) ** 2)
-                    # Normalize by goalie size
-                    openness = min(1.0, spot_dist / max(goalie_w, goalie_h, 1))
-
-                    size = "large" if openness > 0.6 else "medium" if openness > 0.3 else "small"
-
-                    spot = {
-                        "position": name,
-                        "center": (float(tx), float(ty)),
-                        "openness": openness,
-                        "size": size,
-                    }
-                    open_spots.append(spot)
-
-            # Five hole special case: check if goalie legs are apart
-            # (goalie bbox wider at bottom = legs spread = five hole open)
-            # This is a heuristic — in broadcast view we can't see legs clearly
-            # but a wider bottom-half of the goalie bbox suggests butterfly/spread
-
-            # Best spot = most open
-            if open_spots:
-                open_spots.sort(key=lambda s: s["openness"], reverse=True)
-                best_spot = open_spots[0]
+        shot_angle = float(np.degrees(np.arctan2(abs(dy), abs(dx))))
 
         return {
-            "shot_angle": float(shot_angle),
+            "rays": rays,
+            "open_pct": float(open_pct),
+            "goalie_coverage": float(goalie_coverage),
+            "best_target": best_target,
+            "shot_angle": shot_angle,
             "distance": float(distance),
             "goal_center": (float(gx), float(gy)),
-            "net_rect": tuple(float(v) for v in net_rect),
-            "goalie_coverage": float(goalie_coverage),
-            "open_spots": open_spots,
-            "best_spot": best_spot,
-            "carrier_pos": carrier.center,
+            "net_rect": (float(gx - net_w / 2), float(gy - net_h / 2),
+                         float(gx + net_w / 2), float(gy + net_h / 2)),
+            "carrier_pos": (float(puck_pos[0]), float(puck_pos[1])),
         }
+
+    def _ray_hits_goalie(
+        self, start: np.ndarray, end: np.ndarray, goalie: TrackedObject
+    ) -> bool:
+        """Check if a ray from start to end passes through the goalie bbox."""
+        gx1, gy1, gx2, gy2 = goalie.bbox
+
+        # Parametric line: P(t) = start + t * (end - start), t in [0, 1]
+        d = end - start
+        length = np.linalg.norm(d)
+        if length < 1:
+            return False
+
+        # Check multiple points along the ray
+        for t in np.linspace(0.1, 0.9, 15):
+            px = start[0] + t * d[0]
+            py = start[1] + t * d[1]
+            if gx1 <= px <= gx2 and gy1 <= py <= gy2:
+                return True
+
+        return False
 
     def analyze_shootout(
         self,
@@ -159,66 +166,38 @@ class GoalieAnalyzer:
         frame_width: int,
         frame_height: int,
     ) -> Optional[dict]:
-        """Detailed shootout/penalty shot analysis.
-
-        Same as analyze_shot but with additional context for 1-on-1:
-        - Deke vs shot recommendation
-        - Goalie depth (how far out they are)
-        - Movement direction (which way the shooter is skating)
-        """
+        """Shootout analysis with recommendation."""
         base = self.analyze_shot(carrier, goalie, goal_landmark, frame_width, frame_height)
         if base is None:
             return None
 
-        # Additional shootout analysis
         recommendation = "shot"
         reasoning = []
 
-        if goalie is not None:
-            gx1, gy1, gx2, gy2 = goalie.bbox
-            goalie_cx = (gx1 + gx2) / 2
-            goalie_cy = (gy1 + gy2) / 2
+        if base["open_pct"] > 0.4:
+            recommendation = "shot"
+            reasoning.append(f"{base['open_pct']:.0%} of net is open — shoot to the opening")
+        elif base["open_pct"] > 0.15:
+            recommendation = "shot"
+            reasoning.append(f"Some net visible ({base['open_pct']:.0%}) — quick release to open spot")
+        else:
+            recommendation = "deke"
+            reasoning.append(f"Only {base['open_pct']:.0%} of net visible — deke to create opening")
 
-            # Goalie depth: how far from the goal line
-            # In broadcast view, if goalie is further from goal center = challenging more
-            goal_cx, goal_cy = base["goal_center"]
-            depth = np.sqrt((goalie_cx - goal_cx) ** 2 + (goalie_cy - goal_cy) ** 2)
-            norm_depth = depth / max(frame_height, 1)
-
-            base["goalie_depth"] = float(norm_depth)
-
-            if norm_depth > 0.05:
-                reasoning.append("Goalie is challenging — cuts down angle")
-                if base["goalie_coverage"] > 0.7:
-                    recommendation = "deke"
-                    reasoning.append("High coverage — deke to create opening")
-                else:
-                    recommendation = "shot"
-                    reasoning.append("But there are open spots — shoot to the opening")
-            else:
-                reasoning.append("Goalie is deep in crease — more net visible")
-                recommendation = "shot"
-                reasoning.append("Shoot to the open corner")
-
-            # If best spot is five hole and goalie is in butterfly
-            if base["best_spot"] and "five hole" in base["best_spot"]["position"]:
-                if base["best_spot"]["openness"] > 0.4:
-                    reasoning.append("Five hole looks open")
+        if base["best_target"]:
+            reasoning.append(f"Best spot: {base['best_target']['label']}")
 
         base["recommendation"] = recommendation
         base["reasoning"] = reasoning
         base["is_shootout"] = True
-
         return base
 
 
 def draw_goalie_analysis(frame, analysis, alpha=0.7):
-    """Draw goalie shot analysis overlay on a frame.
+    """Draw sight lines from puck to net on the frame.
 
-    Args:
-        frame: BGR video frame (modified in-place).
-        analysis: Dict from GoalieAnalyzer.analyze_shot().
-        alpha: Overlay transparency.
+    Green rays = open path to net
+    Red rays = goalie blocking
     """
     if analysis is None:
         return
@@ -226,64 +205,56 @@ def draw_goalie_analysis(frame, analysis, alpha=0.7):
     font = cv2.FONT_HERSHEY_SIMPLEX
     h, w = frame.shape[:2]
 
-    carrier_pos = tuple(int(v) for v in analysis["carrier_pos"])
-    goal_center = tuple(int(v) for v in analysis["goal_center"])
-
-    # Draw shot angle line
-    cv2.line(frame, carrier_pos, goal_center, (0, 200, 255), 2, cv2.LINE_AA)
-
-    # Draw angle arc
-    angle = analysis["shot_angle"]
-    angle_text = f"{angle:.0f} deg"
-    mid_x = (carrier_pos[0] + goal_center[0]) // 2
-    mid_y = (carrier_pos[1] + goal_center[1]) // 2
-    cv2.putText(frame, angle_text, (mid_x - 20, mid_y - 10),
-                font, 0.5, (0, 200, 255), 2, cv2.LINE_AA)
-
     # Draw net rectangle
     net = analysis["net_rect"]
     nx1, ny1, nx2, ny2 = [int(v) for v in net]
     cv2.rectangle(frame, (nx1, ny1), (nx2, ny2), (255, 255, 255), 2)
 
-    # Draw open spots
-    overlay = frame.copy()
-    for spot in analysis.get("open_spots", []):
-        sx, sy = int(spot["center"][0]), int(spot["center"][1])
-        openness = spot["openness"]
+    # Draw each sight line ray
+    puck = tuple(int(v) for v in analysis["carrier_pos"])
 
-        # Color by openness: green = very open, yellow = moderate
-        if openness > 0.5:
-            color = (0, 255, 100)
-            radius = 12
-        elif openness > 0.3:
-            color = (0, 220, 220)
-            radius = 9
+    for ray in analysis["rays"]:
+        end = tuple(int(v) for v in ray["end"])
+
+        if ray["blocked"]:
+            color = (0, 0, 180)  # Red = blocked
+            thickness = 1
         else:
-            color = (0, 180, 255)
-            radius = 6
+            color = (0, 220, 0)  # Green = open
+            thickness = 2
 
-        # Filled circle for open spot
-        cv2.circle(overlay, (sx, sy), radius, color, -1)
-        cv2.circle(overlay, (sx, sy), radius, (255, 255, 255), 1)
+        cv2.line(frame, puck, end, color, thickness, cv2.LINE_AA)
 
-    cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+        # Small circle at net target point
+        if not ray["blocked"]:
+            cv2.circle(frame, end, 5, (0, 255, 0), -1)
+        else:
+            cv2.circle(frame, end, 3, (0, 0, 200), -1)
 
-    # Label best spot
-    best = analysis.get("best_spot")
+    # Label best target
+    best = analysis.get("best_target")
     if best:
-        bx, by = int(best["center"][0]), int(best["center"][1])
-        label = best["position"].upper()
+        bx, by = int(best["end"][0]), int(best["end"][1])
+        cv2.circle(frame, (bx, by), 8, (0, 255, 100), 2)
+        label = best["label"].upper()
         sz = cv2.getTextSize(label, font, 0.4, 1)[0]
-        cv2.rectangle(frame, (bx - sz[0] // 2 - 3, by + 14),
-                      (bx + sz[0] // 2 + 3, by + 14 + sz[1] + 6), (0, 200, 0), -1)
-        cv2.putText(frame, label, (bx - sz[0] // 2, by + 14 + sz[1] + 2),
+        cv2.rectangle(frame, (bx - sz[0] // 2 - 2, by - 18 - sz[1]),
+                      (bx + sz[0] // 2 + 2, by - 14), (0, 200, 0), -1)
+        cv2.putText(frame, label, (bx - sz[0] // 2, by - 16),
                     font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
-    # Coverage indicator
-    coverage = analysis["goalie_coverage"]
-    cov_text = f"Coverage: {coverage:.0%}"
-    cv2.putText(frame, cov_text, (nx1, ny1 - 8), font, 0.45,
-                (255, 255, 255), 2, cv2.LINE_AA)
+    # Open net percentage
+    open_pct = analysis["open_pct"]
+    pct_color = (0, 200, 0) if open_pct > 0.3 else (0, 180, 200) if open_pct > 0.15 else (0, 0, 200)
+    pct_text = f"Net open: {open_pct:.0%}"
+    cv2.putText(frame, pct_text, (nx1, ny1 - 10), font, 0.5, pct_color, 2, cv2.LINE_AA)
+
+    # Shot angle
+    angle_text = f"Angle: {analysis['shot_angle']:.0f} deg"
+    mid_x = (puck[0] + int(analysis["goal_center"][0])) // 2
+    mid_y = (puck[1] + int(analysis["goal_center"][1])) // 2
+    cv2.putText(frame, angle_text, (mid_x - 30, mid_y - 10),
+                font, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
 
     # Shootout recommendation
     if analysis.get("is_shootout"):
@@ -293,5 +264,5 @@ def draw_goalie_analysis(frame, analysis, alpha=0.7):
         cv2.putText(frame, rec_text, (10, h - 40), font, 0.7,
                     (0, 255, 255), 2, cv2.LINE_AA)
         if reasons:
-            cv2.putText(frame, reasons[0], (10, h - 15), font, 0.45,
+            cv2.putText(frame, reasons[0][:70], (10, h - 15), font, 0.45,
                         (200, 200, 200), 1, cv2.LINE_AA)

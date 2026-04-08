@@ -1,17 +1,17 @@
-"""Open space detection on the ice surface.
+"""Open ice detection — finds tactical gaps between defenders.
 
-Identifies areas of open ice by computing an influence map based on
-player positions. Regions far from all players are "open space."
-Particularly valuable space is highlighted when it's:
-- Adjacent to the puck carrier (immediately usable)
-- Reachable by a simple pass from the carrier
-- In a dangerous area (slot, between defenders)
+NOT "everywhere without a player" — that's the whole rink.
+Instead, finds the specific GAPS and SEAMS between opponent players
+that a carrier could skate through or pass through. These are the
+pockets of space that matter tactically.
 
-Uses a grid-based approach for efficiency — divides the frame into
-cells and computes the minimum distance from each cell to any player.
+Approach:
+1. Look at pairs of opponents and find the midpoints between them
+2. Check if those midpoints are actually open (no other player nearby)
+3. Classify by tactical value (near carrier, in slot, passable)
+4. Return only 1-3 most valuable gaps as discrete markers, not shaded regions
 """
 
-import cv2
 import numpy as np
 from typing import Optional
 
@@ -19,39 +19,33 @@ from .game_context import TrackedObject
 
 
 class SpaceDetector:
-    """Detect and classify open space on the ice.
+    """Find tactical gaps between defenders.
 
-    Computes an influence map where each pixel's value represents
-    how "open" that area is (distance from nearest player).
-    Then identifies significant open regions and classifies them
-    by tactical value.
+    Instead of shading huge regions of empty ice, identifies specific
+    exploitable seams and pockets between opponent players.
     """
 
     def __init__(
         self,
-        grid_size: int = 24,
-        min_space_radius: float = 120,
-        carrier_adjacent_radius: float = 200,
-        dangerous_zone_x_range: tuple = (0.30, 0.75),
-        min_region_area: int = 3000,
-        max_regions: int = 3,
+        min_gap_distance: float = 100,
+        max_gap_distance: float = 400,
+        gap_clear_radius: float = 80,
+        carrier_relevant_radius: float = 350,
+        max_gaps: int = 3,
     ):
         """
         Args:
-            grid_size: Pixel size of each grid cell for the influence map.
-            min_space_radius: Minimum distance from ALL players to count as "open" (px).
-                120px = roughly one player-width of clear space in every direction.
-            carrier_adjacent_radius: Distance from carrier to count as "adjacent" (px).
-            dangerous_zone_x_range: Normalized x-range for "dangerous" ice (slot area).
-            min_region_area: Minimum contour area in pixels to show (filters tiny gaps).
-            max_regions: Only show top N most valuable spaces (avoids cluttering screen).
+            min_gap_distance: Min distance between two opponents to consider a gap (px).
+            max_gap_distance: Max distance — beyond this they're too far apart to be a "gap."
+            gap_clear_radius: The midpoint must be this far from any other player to be "open."
+            carrier_relevant_radius: Only show gaps within this distance of the carrier.
+            max_gaps: Maximum number of gaps to return.
         """
-        self.grid_size = grid_size
-        self.min_space_radius = min_space_radius
-        self.carrier_adjacent_radius = carrier_adjacent_radius
-        self.dangerous_zone_x_range = dangerous_zone_x_range
-        self.min_region_area = min_region_area
-        self.max_regions = max_regions
+        self.min_gap_distance = min_gap_distance
+        self.max_gap_distance = max_gap_distance
+        self.gap_clear_radius = gap_clear_radius
+        self.carrier_relevant_radius = carrier_relevant_radius
+        self.max_gaps = max_gaps
 
     def find_open_spaces(
         self,
@@ -63,168 +57,140 @@ class SpaceDetector:
         teammates: list = None,
         opponents: list = None,
     ) -> list:
-        """Find significant open space regions.
+        """Find tactical gaps between opponents.
 
-        Returns list of OpenSpace dicts sorted by tactical value.
+        Returns list of gap dicts sorted by tactical value.
+        Each gap has a center point, the two defenders forming it,
+        and a tactical classification.
         """
-        # Build list of all player positions (both teams + goalies)
-        all_positions = []
-        for p in players:
-            all_positions.append(np.array(p.center))
+        # We need opponents to find gaps between them
+        # If no opponent list, use all non-carrier players as opponents
+        if opponents is None or len(opponents) < 2:
+            opp_list = [p for p in players if carrier is None or p.track_id != carrier.track_id]
+        else:
+            opp_list = opponents
+
+        if len(opp_list) < 2:
+            return []
+
+        opp_positions = [(o, np.array(o.center)) for o in opp_list]
+        all_positions = [np.array(p.center) for p in players]
         for g in goalies:
             all_positions.append(np.array(g.center))
 
-        if not all_positions:
-            return []
+        gaps = []
 
-        all_positions = np.array(all_positions)
+        # Check every pair of opponents for gaps
+        for i in range(len(opp_positions)):
+            for j in range(i + 1, len(opp_positions)):
+                obj_a, pos_a = opp_positions[i]
+                obj_b, pos_b = opp_positions[j]
 
-        # Compute influence map on a grid
-        grid_h = frame_height // self.grid_size
-        grid_w = frame_width // self.grid_size
+                dist = float(np.linalg.norm(pos_a - pos_b))
 
-        # Grid cell centers
-        gy = np.arange(grid_h) * self.grid_size + self.grid_size // 2
-        gx = np.arange(grid_w) * self.grid_size + self.grid_size // 2
-        grid_x, grid_y = np.meshgrid(gx, gy)
-        grid_points = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)  # (N, 2)
+                # Skip if too close (no real gap) or too far (not a defensive pair)
+                if dist < self.min_gap_distance or dist > self.max_gap_distance:
+                    continue
 
-        # Min distance from each grid cell to any player
-        min_dists = np.full(len(grid_points), np.inf)
-        for pos in all_positions:
-            dists = np.linalg.norm(grid_points - pos, axis=1)
-            min_dists = np.minimum(min_dists, dists)
+                # Midpoint of the gap
+                midpoint = (pos_a + pos_b) / 2.0
 
-        # Reshape to grid
-        dist_map = min_dists.reshape(grid_h, grid_w)
+                # Check if the midpoint is actually clear
+                # (no other player standing in the gap)
+                is_clear = True
+                for pos in all_positions:
+                    d = np.linalg.norm(midpoint - pos)
+                    if d < self.gap_clear_radius:
+                        is_clear = False
+                        break
 
-        # Find open cells (above threshold)
-        open_mask = dist_map > self.min_space_radius
+                if not is_clear:
+                    continue
 
-        if not open_mask.any():
-            return []
+                # Classify the gap
+                value = self._classify_gap(
+                    midpoint, dist, carrier, frame_width, frame_height,
+                    teammates,
+                )
 
-        # Find contiguous open regions using connected components
-        open_uint8 = open_mask.astype(np.uint8) * 255
-        # Upscale for better contour detection
-        open_upscaled = cv2.resize(open_uint8, (frame_width, frame_height), interpolation=cv2.INTER_NEAREST)
-        contours, _ = cv2.findContours(open_upscaled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if value["score"] < 0.2:
+                    continue  # Not tactically useful
 
-        spaces = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < self.min_region_area:
-                continue
+                gaps.append({
+                    "center": (float(midpoint[0]), float(midpoint[1])),
+                    "gap_width": dist,
+                    "defender_a": obj_a.center,
+                    "defender_b": obj_b.center,
+                    "value": value["rating"],
+                    "value_score": value["score"],
+                    "reasons": value["reasons"],
+                    "adjacent_to_carrier": value["adjacent"],
+                    "in_dangerous_zone": value["dangerous"],
+                    "passable": value["passable"],
+                })
 
-            # Bounding rect and centroid
-            M = cv2.moments(contour)
-            if M["m00"] == 0:
-                continue
-            cx = int(M["m10"] / M["m00"])
-            cy = int(M["m01"] / M["m00"])
-            x, y, w, h = cv2.boundingRect(contour)
+        # Sort by value
+        gaps.sort(key=lambda g: g["value_score"], reverse=True)
+        return gaps[:self.max_gaps]
 
-            # Classify tactical value
-            value = self._classify_space(
-                cx, cy, area, carrier, frame_width, frame_height,
-                teammates, opponents,
-            )
-
-            spaces.append({
-                "center": (cx, cy),
-                "contour": contour,
-                "area": area,
-                "bbox": (x, y, w, h),
-                "value": value["rating"],
-                "value_score": value["score"],
-                "reasons": value["reasons"],
-                "adjacent_to_carrier": value["adjacent"],
-                "in_dangerous_zone": value["dangerous"],
-                "passable": value["passable"],
-            })
-
-        # Sort by value score (highest first)
-        spaces.sort(key=lambda s: s["value_score"], reverse=True)
-
-        # Only return high-value spaces (score >= 0.25) up to max_regions
-        significant = [s for s in spaces if s["value_score"] >= 0.25]
-        return significant[:self.max_regions]
-
-    def _classify_space(
-        self, cx, cy, area, carrier, frame_width, frame_height,
-        teammates, opponents,
+    def _classify_gap(
+        self, midpoint, gap_width, carrier, frame_width, frame_height,
+        teammates,
     ) -> dict:
-        """Classify the tactical value of an open space region."""
+        """Classify the tactical value of a gap between defenders."""
         score = 0.0
         reasons = []
         adjacent = False
         dangerous = False
         passable = False
 
-        # Size bonus (bigger space = more valuable)
-        norm_area = area / (frame_width * frame_height)
-        if norm_area > 0.02:
-            score += 0.2
-            reasons.append("Large open area")
-        elif norm_area > 0.005:
+        mx, my = midpoint
+
+        # Gap width bonus (wider = easier to exploit)
+        if gap_width > 250:
+            score += 0.15
+            reasons.append(f"Wide seam ({gap_width:.0f}px)")
+        elif gap_width > 150:
             score += 0.1
+            reasons.append("Exploitable gap")
 
-        # Adjacent to carrier (immediately usable)
+        # Adjacent to carrier
         if carrier is not None:
-            dist_to_carrier = np.linalg.norm(
-                np.array([cx, cy]) - np.array(carrier.center)
-            )
-            if dist_to_carrier < self.carrier_adjacent_radius:
+            dist_to_carrier = float(np.linalg.norm(midpoint - np.array(carrier.center)))
+            if dist_to_carrier < self.carrier_relevant_radius * 0.5:
                 adjacent = True
-                score += 0.35
-                reasons.append("Adjacent to puck carrier")
-            elif dist_to_carrier < self.carrier_adjacent_radius * 2:
-                score += 0.15
-                reasons.append("One pass away")
+                score += 0.4
+                reasons.append("Gap right next to carrier")
+            elif dist_to_carrier < self.carrier_relevant_radius:
+                score += 0.2
+                reasons.append("Gap within reach")
                 passable = True
+            else:
+                # Too far from carrier to be relevant right now
+                score -= 0.1
 
-        # In dangerous zone (between blue line and goal)
-        norm_x = cx / max(frame_width, 1)
-        if self.dangerous_zone_x_range[0] <= norm_x <= self.dangerous_zone_x_range[1]:
-            # Center of ice vertically is more dangerous
-            norm_y = cy / max(frame_height, 1)
-            if 0.25 <= norm_y <= 0.75:
-                dangerous = True
-                score += 0.25
-                reasons.append("Dangerous ice (slot area)")
+        # In dangerous zone (slot area)
+        norm_x = mx / max(frame_width, 1)
+        norm_y = my / max(frame_height, 1)
+        if 0.30 <= norm_x <= 0.75 and 0.25 <= norm_y <= 0.75:
+            dangerous = True
+            score += 0.25
+            reasons.append("Slot area")
 
-        # Has a teammate nearby who could receive a pass into the space
+        # Teammate near the gap (could receive a pass through it)
         if teammates:
             for t in teammates:
-                dist = np.linalg.norm(np.array([cx, cy]) - np.array(t.center))
-                if dist < self.carrier_adjacent_radius * 1.5:
+                d = float(np.linalg.norm(midpoint - np.array(t.center)))
+                if d < self.carrier_relevant_radius:
                     passable = True
                     score += 0.15
-                    reasons.append(f"Teammate #{t.track_id} can attack this space")
+                    reasons.append(f"#{t.track_id} can receive through gap")
                     break
-
-        # Between opponents (seam space)
-        if opponents and len(opponents) >= 2:
-            opp_positions = [np.array(o.center) for o in opponents]
-            space_pos = np.array([cx, cy])
-            # Check if space is between two opponents
-            for i in range(len(opp_positions)):
-                for j in range(i + 1, len(opp_positions)):
-                    mid = (opp_positions[i] + opp_positions[j]) / 2
-                    dist_to_mid = np.linalg.norm(space_pos - mid)
-                    opp_gap = np.linalg.norm(opp_positions[i] - opp_positions[j])
-                    if dist_to_mid < opp_gap * 0.4 and opp_gap > 80:
-                        score += 0.2
-                        reasons.append("Seam between defenders")
-                        break
-                else:
-                    continue
-                break
 
         # Rating
         if score >= 0.5:
             rating = "high"
-        elif score >= 0.25:
+        elif score >= 0.3:
             rating = "medium"
         else:
             rating = "low"
@@ -237,48 +203,3 @@ class SpaceDetector:
             "dangerous": dangerous,
             "passable": passable,
         }
-
-    def compute_influence_heatmap(
-        self, players: list, goalies: list,
-        frame_width: int, frame_height: int,
-    ) -> np.ndarray:
-        """Compute a full-resolution influence heatmap for visualization.
-
-        Returns a single-channel float32 image (0=crowded, 1=open) at
-        frame resolution. Used for overlay rendering.
-        """
-        all_positions = []
-        for p in players:
-            all_positions.append(np.array(p.center))
-        for g in goalies:
-            all_positions.append(np.array(g.center))
-
-        if not all_positions:
-            return np.ones((frame_height, frame_width), dtype=np.float32)
-
-        all_positions = np.array(all_positions)
-
-        # Compute on grid, then upscale
-        grid_h = frame_height // self.grid_size
-        grid_w = frame_width // self.grid_size
-
-        gy = np.arange(grid_h) * self.grid_size + self.grid_size // 2
-        gx = np.arange(grid_w) * self.grid_size + self.grid_size // 2
-        grid_x, grid_y = np.meshgrid(gx, gy)
-        grid_points = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)
-
-        min_dists = np.full(len(grid_points), np.inf)
-        for pos in all_positions:
-            dists = np.linalg.norm(grid_points - pos, axis=1)
-            min_dists = np.minimum(min_dists, dists)
-
-        dist_map = min_dists.reshape(grid_h, grid_w)
-
-        # Normalize: 0 = player standing here, 1 = very open
-        max_dist = 200.0  # Cap at 200px
-        heatmap = np.clip(dist_map / max_dist, 0, 1).astype(np.float32)
-
-        # Upscale to frame resolution with smooth interpolation
-        heatmap = cv2.resize(heatmap, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR)
-
-        return heatmap
