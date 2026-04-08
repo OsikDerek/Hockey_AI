@@ -276,6 +276,9 @@ def run_game_analysis_mode(args, meta):
     fps = meta["fps"]
     freeze_duration = 2.0  # seconds to hold on decision frame
 
+    # Counters for debugging visual features
+    _vis_counts = {"ambient": 0, "open_spaces": 0, "coaching_lanes": 0, "freeze": 0}
+
     with video_writer(args.output, fps=fps, width=out_w, height=out_h) as writer:
         for i, (frame, ctx) in enumerate(zip(frame_data, analysis.frame_contexts)):
             events = analysis.events_at_frame(i)
@@ -298,6 +301,8 @@ def run_game_analysis_mode(args, meta):
                     ambient = annotator.lane_calculator.calc_ambient_connections(
                         carrier_obj, teammates, opponents, out_w, out_h
                     )
+                    if ambient:
+                        _vis_counts["ambient"] += 1
 
             # Open space detection (always-on, subtle)
             open_spaces = None
@@ -307,6 +312,8 @@ def run_game_analysis_mode(args, meta):
                     out_w, out_h,
                     teammates=teammates, opponents=opponents,
                 )
+                if open_spaces:
+                    _vis_counts["open_spaces"] += 1
 
             if phase_info is not None and annotator.coaching_mode:
                 # Coaching mode: calculate full lanes
@@ -328,9 +335,13 @@ def run_game_analysis_mode(args, meta):
                         ev_carrier, ev_teammates, ev_opponents, out_w, out_h,
                     )
                     lane_data = {"shooting": shooting, "passing": passing}
+                    if passing or shooting:
+                        _vis_counts["coaching_lanes"] += 1
 
                 annotated = annotator.render_coaching(
                     frame, ctx, events, phase_info, lane_data,
+                    ambient_connections=ambient,
+                    open_spaces=open_spaces,
                 )
             else:
                 # Standard mode with ambient connections + open space
@@ -350,6 +361,7 @@ def run_game_analysis_mode(args, meta):
                 phase = phase_info["phase"]
                 if phase == "freeze":
                     repeat = int(fps * freeze_duration)
+                    _vis_counts["freeze"] += 1
                 elif phase == "slowdown":
                     repeat = 2
                 else:
@@ -364,6 +376,10 @@ def run_game_analysis_mode(args, meta):
     total_time = time.time() - start_time
 
     print(f"  Render complete in {render_time:.1f}s")
+    print(f"  Visual features: ambient={_vis_counts['ambient']} frames, "
+          f"open_spaces={_vis_counts['open_spaces']} frames, "
+          f"coaching_lanes={_vis_counts['coaching_lanes']} frames, "
+          f"freeze_frames={_vis_counts['freeze']}")
 
     # ── Report ────────────────────────────────────────────
     print()
@@ -403,10 +419,9 @@ def _split_teams(players, carrier_id, team_assignments):
     """Split players into teammates and opponents relative to the carrier.
 
     When team classification is unreliable or unavailable, uses a
-    conservative approach: only classify as teammate if we have HIGH
-    confidence in the team assignment (same team as carrier with both
-    assigned). Everything else goes to opponents. This prevents
-    drawing passing lanes to opposing players.
+    proximity-based heuristic: nearby players are treated as "unknown"
+    teammates so that ambient connections and passing lanes still render.
+    This ensures the visual output always tells a coaching story.
     """
     carrier_team = team_assignments.get(carrier_id)
     teammates = []
@@ -420,26 +435,48 @@ def _split_teams(players, carrier_id, team_assignments):
             team_counts[t] = team_counts.get(t, 0) + 1
 
     # Check if team classification looks reasonable
-    # (each team should have roughly similar player counts)
+    # Both teams should have at least 2 players AND be roughly balanced
+    # (ratio no worse than 3:1 for visible players in this frame)
     classification_reliable = False
     if carrier_team and len(team_counts) == 2:
         counts = list(team_counts.values())
-        if min(counts) >= 2:  # At least 2 players per team
+        ratio = max(counts) / max(min(counts), 1)
+        if min(counts) >= 2 and ratio <= 3.0:
             classification_reliable = True
 
-    for p in players:
-        if p.track_id == carrier_id:
-            continue
-        p_team = team_assignments.get(p.track_id)
+    if classification_reliable:
+        for p in players:
+            if p.track_id == carrier_id:
+                continue
+            p_team = team_assignments.get(p.track_id)
+            if p_team == carrier_team:
+                teammates.append(p)
+            elif p_team and p_team != carrier_team:
+                opponents.append(p)
+            else:
+                opponents.append(p)
+    else:
+        # Unreliable classification: use proximity heuristic
+        # Carrier's nearest ~half of visible players treated as teammates,
+        # the farther half as opponents. This ensures lanes always render.
+        carrier_obj = None
+        for p in players:
+            if p.track_id == carrier_id:
+                carrier_obj = p
+                break
 
-        if classification_reliable and carrier_team and p_team == carrier_team:
-            teammates.append(p)
-        elif classification_reliable and carrier_team and p_team and p_team != carrier_team:
-            opponents.append(p)
+        others = [p for p in players if p.track_id != carrier_id]
+        if carrier_obj and others:
+            # Sort by distance to carrier
+            others.sort(key=lambda p: np.linalg.norm(
+                np.array(p.center) - np.array(carrier_obj.center)
+            ))
+            # Nearest half = teammates, farther half = opponents
+            split = max(1, len(others) // 2)
+            teammates = others[:split]
+            opponents = others[split:]
         else:
-            # When classification is unreliable, DON'T draw lanes to anyone
-            # Treat all as opponents (no passing lanes = better than wrong lanes)
-            opponents.append(p)
+            opponents = others
 
     return teammates, opponents
 
