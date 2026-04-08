@@ -70,20 +70,52 @@ class GoalieAnalyzer:
         net_w = frame_width * self.net_width_ratio
         net_h = frame_height * self.net_height_ratio
 
-        # Generate target points along the net opening
-        # Fan across the net width and height to create a grid of targets
-        targets = []
-        labels = ["far high", "far mid", "far low",
-                  "center high", "center mid", "center low",
-                  "near high", "near mid", "near low"]
+        # Generate target points matching the 7 standard hockey holes
+        # plus additional coverage points for a total of ~20 rays.
+        #
+        # Hockey goalie holes:
+        # 1 = Glove side high (top-left from shooter)
+        # 2 = Glove side low (bottom-left)
+        # 3 = Blocker side high (top-right)
+        # 4 = Blocker side low (bottom-right)
+        # 5 = Five hole (between the legs, bottom center)
+        # 6 = Six hole (under stick-arm, between arm and body — blocker side mid)
+        # 7 = Seven hole (under glove-arm, between arm and body — glove side mid)
+        #
+        # Additional: corner pockets, bar-down spots, and mid-net coverage.
 
-        for col, x_frac in enumerate([0.15, 0.5, 0.85]):  # across net width
-            for row, y_frac in enumerate([0.15, 0.5, 0.85]):  # across net height
-                tx = gx - net_w / 2 + net_w * x_frac
-                ty = gy - net_h / 2 + net_h * y_frac
-                idx = col * 3 + row
-                label = labels[idx] if idx < len(labels) else f"spot_{idx}"
-                targets.append({"pos": (float(tx), float(ty)), "label": label})
+        targets = [
+            # The 4 corners (holes 1-4)
+            {"pos": (gx - net_w * 0.42, gy - net_h * 0.42), "label": "1 - Glove High", "hole": 1},
+            {"pos": (gx - net_w * 0.42, gy + net_h * 0.42), "label": "2 - Glove Low", "hole": 2},
+            {"pos": (gx + net_w * 0.42, gy - net_h * 0.42), "label": "3 - Blocker High", "hole": 3},
+            {"pos": (gx + net_w * 0.42, gy + net_h * 0.42), "label": "4 - Blocker Low", "hole": 4},
+
+            # Five hole (between the legs — dead center low)
+            {"pos": (gx, gy + net_h * 0.35), "label": "5 - Five Hole", "hole": 5},
+
+            # Six hole (under stick arm — blocker side, mid-height)
+            {"pos": (gx + net_w * 0.25, gy + net_h * 0.05), "label": "6 - Six Hole", "hole": 6},
+
+            # Seven hole (under glove arm — glove side, mid-height)
+            {"pos": (gx - net_w * 0.25, gy + net_h * 0.05), "label": "7 - Seven Hole", "hole": 7},
+
+            # Additional coverage: mid-points and bar-down spots
+            {"pos": (gx - net_w * 0.42, gy), "label": "Glove Mid", "hole": 0},
+            {"pos": (gx + net_w * 0.42, gy), "label": "Blocker Mid", "hole": 0},
+            {"pos": (gx, gy - net_h * 0.42), "label": "Top Center", "hole": 0},
+            {"pos": (gx, gy), "label": "Center", "hole": 0},
+            {"pos": (gx - net_w * 0.25, gy - net_h * 0.35), "label": "Glove Shelf", "hole": 0},
+            {"pos": (gx + net_w * 0.25, gy - net_h * 0.35), "label": "Blocker Shelf", "hole": 0},
+            {"pos": (gx - net_w * 0.15, gy + net_h * 0.35), "label": "Near Five Glove", "hole": 0},
+            {"pos": (gx + net_w * 0.15, gy + net_h * 0.35), "label": "Near Five Blocker", "hole": 0},
+
+            # Extra corner pockets (just inside the posts)
+            {"pos": (gx - net_w * 0.48, gy - net_h * 0.25), "label": "Post Glove High", "hole": 0},
+            {"pos": (gx - net_w * 0.48, gy + net_h * 0.25), "label": "Post Glove Low", "hole": 0},
+            {"pos": (gx + net_w * 0.48, gy - net_h * 0.25), "label": "Post Blocker High", "hole": 0},
+            {"pos": (gx + net_w * 0.48, gy + net_h * 0.25), "label": "Post Blocker Low", "hole": 0},
+        ]
 
         # Check each ray against the goalie
         rays = []
@@ -101,6 +133,7 @@ class GoalieAnalyzer:
                 "end": target["pos"],
                 "blocked": blocked,
                 "label": target["label"],
+                "hole": target.get("hole", 0),
             })
 
             if not blocked:
@@ -111,12 +144,14 @@ class GoalieAnalyzer:
         open_pct = open_count / max(total_rays, 1)
         goalie_coverage = 1.0 - open_pct
 
-        # Best target = first open ray (they're ordered: far high, far mid, etc.)
+        # Best target: prefer named holes (1-7) that are open, then others
         best_target = None
-        for r in rays:
-            if not r["blocked"]:
-                best_target = r
-                break
+        open_named_holes = [r for r in rays if not r["blocked"] and r.get("hole", 0) > 0]
+        open_other = [r for r in rays if not r["blocked"] and r.get("hole", 0) == 0]
+        if open_named_holes:
+            best_target = open_named_holes[0]  # Corners and five-hole first
+        elif open_other:
+            best_target = open_other[0]
 
         # Shot angle
         dx = float(gx - puck_pos[0])
@@ -215,21 +250,28 @@ def draw_goalie_analysis(frame, analysis, alpha=0.7):
 
     for ray in analysis["rays"]:
         end = tuple(int(v) for v in ray["end"])
+        is_named = ray.get("hole", 0) > 0
 
         if ray["blocked"]:
             color = (0, 0, 180)  # Red = blocked
-            thickness = 1
+            thickness = 1 if not is_named else 2
+            cv2.line(frame, puck, end, color, thickness, cv2.LINE_AA)
+            cv2.circle(frame, end, 4 if is_named else 3, (0, 0, 200), -1)
         else:
             color = (0, 220, 0)  # Green = open
-            thickness = 2
+            thickness = 2 if not is_named else 3
+            cv2.line(frame, puck, end, color, thickness, cv2.LINE_AA)
+            radius = 7 if is_named else 5
+            cv2.circle(frame, end, radius, (0, 255, 0), -1)
+            cv2.circle(frame, end, radius, (255, 255, 255), 1)
 
-        cv2.line(frame, puck, end, color, thickness, cv2.LINE_AA)
-
-        # Small circle at net target point
-        if not ray["blocked"]:
-            cv2.circle(frame, end, 5, (0, 255, 0), -1)
-        else:
-            cv2.circle(frame, end, 3, (0, 0, 200), -1)
+            # Label named open holes right at the spot
+            if is_named:
+                hole_label = ray["label"].split(" - ")[-1] if " - " in ray["label"] else ray["label"]
+                sz = cv2.getTextSize(hole_label, font, 0.35, 1)[0]
+                lx, ly = end[0] + 10, end[1] - 5
+                cv2.rectangle(frame, (lx - 1, ly - sz[1] - 2), (lx + sz[0] + 2, ly + 2), (0, 180, 0), -1)
+                cv2.putText(frame, hole_label, (lx, ly), font, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
     # Label best target
     best = analysis.get("best_target")
