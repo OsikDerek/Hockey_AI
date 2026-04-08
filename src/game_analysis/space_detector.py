@@ -29,22 +29,29 @@ class SpaceDetector:
 
     def __init__(
         self,
-        grid_size: int = 20,
-        min_space_radius: float = 40,
-        carrier_adjacent_radius: float = 150,
+        grid_size: int = 24,
+        min_space_radius: float = 120,
+        carrier_adjacent_radius: float = 200,
         dangerous_zone_x_range: tuple = (0.30, 0.75),
+        min_region_area: int = 3000,
+        max_regions: int = 3,
     ):
         """
         Args:
             grid_size: Pixel size of each grid cell for the influence map.
-            min_space_radius: Minimum distance from all players to count as "open" (px).
+            min_space_radius: Minimum distance from ALL players to count as "open" (px).
+                120px = roughly one player-width of clear space in every direction.
             carrier_adjacent_radius: Distance from carrier to count as "adjacent" (px).
             dangerous_zone_x_range: Normalized x-range for "dangerous" ice (slot area).
+            min_region_area: Minimum contour area in pixels to show (filters tiny gaps).
+            max_regions: Only show top N most valuable spaces (avoids cluttering screen).
         """
         self.grid_size = grid_size
         self.min_space_radius = min_space_radius
         self.carrier_adjacent_radius = carrier_adjacent_radius
         self.dangerous_zone_x_range = dangerous_zone_x_range
+        self.min_region_area = min_region_area
+        self.max_regions = max_regions
 
     def find_open_spaces(
         self,
@@ -106,7 +113,7 @@ class SpaceDetector:
         spaces = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < 500:  # Skip tiny regions
+            if area < self.min_region_area:
                 continue
 
             # Bounding rect and centroid
@@ -139,8 +146,9 @@ class SpaceDetector:
         # Sort by value score (highest first)
         spaces.sort(key=lambda s: s["value_score"], reverse=True)
 
-        # Return top 5 most valuable spaces
-        return spaces[:5]
+        # Only return high-value spaces (score >= 0.25) up to max_regions
+        significant = [s for s in spaces if s["value_score"] >= 0.25]
+        return significant[:self.max_regions]
 
     def _classify_space(
         self, cx, cy, area, carrier, frame_width, frame_height,

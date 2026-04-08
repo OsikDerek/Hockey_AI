@@ -11,6 +11,7 @@ from typing import Optional
 from .game_context import FrameContext, GameEvent
 from .lane_calculator import LaneCalculator
 from .space_detector import SpaceDetector
+from .goalie_analyzer import GoalieAnalyzer, draw_goalie_analysis
 
 
 # Colors by class (BGR)
@@ -79,6 +80,7 @@ class GameAnnotator:
         self._team_assignments = {}
         self.lane_calculator = LaneCalculator()
         self.space_detector = SpaceDetector()
+        self.goalie_analyzer = GoalieAnalyzer()
 
     def set_team_assignments(self, assignments: dict):
         """Update the current team assignment map."""
@@ -180,6 +182,27 @@ class GameAnnotator:
         # Blend overlay — use a minimum alpha so lanes are always visible
         lane_alpha = max(alpha, 0.55)
         cv2.addWeighted(overlay, lane_alpha, annotated, 1.0 - lane_alpha, 0, annotated)
+
+        # Goalie analysis during shooting-related events
+        event_type = event.event_type if event else ""
+        is_shot_event = event_type in ("shot_vs_pass", "odd_man_rush", "missed_opportunity")
+        if is_shot_event and context.goalies and phase in ("slowdown", "freeze"):
+            # Find carrier
+            eid = event.player_id if event else context.possession_player_id
+            carrier_obj = None
+            for p in context.players:
+                if p.track_id == eid:
+                    carrier_obj = p
+                    break
+            if carrier_obj:
+                goal_lm = None
+                if context.rink_landmarks.get("goal"):
+                    goal_lm = context.rink_landmarks["goal"][0]
+                h, w = annotated.shape[:2]
+                goalie_data = self.goalie_analyzer.analyze_shot(
+                    carrier_obj, context.goalies[0], goal_lm, w, h
+                )
+                draw_goalie_analysis(annotated, goalie_data)
 
         # Freeze frame special treatment
         if phase == "freeze" and event:
