@@ -25,18 +25,22 @@ class ZoneDetector:
         zone = zd.update(objects, frame_width=1920)
     """
 
-    def __init__(self, smoothing_window: int = 15):
+    def __init__(self, smoothing_window: int = 15, recalibrate_every: int = 300):
         """
         Args:
             smoothing_window: Rolling window for zone classification smoothing.
+            recalibrate_every: Rebuild blue-line estimates every N frames to
+                track follow-cam drift. ~10s at 30fps.
         """
         self.smoothing_window = smoothing_window
+        self.recalibrate_every = recalibrate_every
 
-        # Rink calibration state
-        self._goal_positions = []       # x-positions of detected goals
-        self._center_positions = []     # x-positions of center ice
+        # Rink calibration state (bounded histories so old detections decay)
+        self._goal_positions = deque(maxlen=100)    # x-positions of detected goals
+        self._center_positions = deque(maxlen=100)  # x-positions of center ice
         self._blue_lines = None         # (left_x, right_x) once calibrated
         self._calibrated = False
+        self._calibration_frame = 0     # tick counter for periodic rebuild
 
         # Zone history for smoothing
         self._zone_history = deque(maxlen=smoothing_window)
@@ -79,7 +83,22 @@ class ZoneDetector:
         return self._smoothed_zone()
 
     def _update_calibration(self, objects: list, frame_width: int):
-        """Update rink landmark estimates from detected objects."""
+        """Update rink landmark estimates from detected objects.
+
+        Called every frame. Accumulates goal/centroid x-positions (bounded to
+        last 100 samples), periodically rebuilds blue-line estimates to track
+        follow-cam drift, and uses NHL-accurate symmetric geometry.
+        """
+        self._calibration_frame += 1
+
+        # Periodic rebuild so a moving camera can re-calibrate
+        if (
+            self._calibration_frame % self.recalibrate_every == 0
+            and self._calibration_frame > 0
+        ):
+            self._calibrated = False
+            self._blue_lines = None
+
         for obj in objects:
             if obj.class_name == "goal" and obj.confidence > 0.4:
                 self._goal_positions.append(obj.center[0])
@@ -89,8 +108,8 @@ class ZoneDetector:
         # Need at least some goal and center detections to calibrate
         if len(self._goal_positions) >= 5 and len(self._center_positions) >= 3:
             # Goals should cluster at two x-positions (left and right)
-            goal_x = np.array(self._goal_positions)
-            center_x = np.median(self._center_positions)
+            goal_x = np.array(list(self._goal_positions))
+            center_x = np.median(list(self._center_positions))
 
             # Split goals into left and right clusters
             left_goals = goal_x[goal_x < center_x]
@@ -100,9 +119,12 @@ class ZoneDetector:
                 left_goal_x = np.median(left_goals)
                 right_goal_x = np.median(right_goals)
 
-                # Blue lines are roughly 1/3 of the way from each goal to center
-                left_blue = left_goal_x + (center_x - left_goal_x) * 0.35
-                right_blue = center_x + (right_goal_x - center_x) * 0.65
+                # NHL geometry: goal line to blue line = 64 ft; goal line to
+                # center = 89 ft; so blue line is ~0.72 of the way from goal
+                # toward center. Apply the same 0.72 ratio on both sides
+                # (mirrored) so left/right zones are symmetric.
+                left_blue = left_goal_x + (center_x - left_goal_x) * 0.72
+                right_blue = center_x + (right_goal_x - center_x) * 0.28
 
                 self._blue_lines = (left_blue, right_blue)
                 self._calibrated = True
@@ -153,9 +175,10 @@ class ZoneDetector:
 
     def reset(self):
         """Reset all state."""
-        self._goal_positions = []
-        self._center_positions = []
+        self._goal_positions.clear()
+        self._center_positions.clear()
         self._blue_lines = None
         self._calibrated = False
+        self._calibration_frame = 0
         self._zone_history.clear()
         self._defensive_side = "left"

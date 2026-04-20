@@ -173,11 +173,14 @@ class TeamClassifier:
             print(f"  TeamClassifier: WARNING - cluster centers very similar "
                   f"(dist={center_dist:.1f}), classification may be unreliable")
 
-        # Convention: brighter cluster = team_a (home), darker = team_b (away)
-        # This is arbitrary but stable
-        brightness_0 = self._centers[0].mean()
-        brightness_1 = self._centers[1].mean()
-        if brightness_1 > brightness_0:
+        # Convention: redder cluster = team_a, bluer cluster = team_b.
+        # Use (R - B) dominance instead of brightness because it's stable under
+        # lighting changes (brightness swings with arena lighting; the color
+        # axis between two jerseys stays constant).
+        # BGR indexing: [0]=B, [2]=R.
+        rb0 = float(self._centers[0][2] - self._centers[0][0])
+        rb1 = float(self._centers[1][2] - self._centers[1][0])
+        if rb1 > rb0:
             self._centers = self._centers[[1, 0]]
             labels = 1 - labels
 
@@ -199,15 +202,46 @@ class TeamClassifier:
         self._team_map[track_id] = "team_a" if majority == 0 else "team_b"
 
     def _refine_centers(self, recent_features):
-        """Blend recent observations into cluster centers."""
+        """Blend recent observations into cluster centers.
+
+        Uses a 70/30 (old/new) blend for stability, but jumps to 50/50 if the
+        cluster counts are heavily imbalanced (>3:1) — indicates one cluster is
+        absorbing outliers and we need to re-center faster.
+        """
         if not recent_features:
             return
         colors = np.array([c for _, c in recent_features], dtype=np.float64)
+        assignments = np.array([self._classify(c) for c in colors])
+        n0 = int((assignments == 0).sum())
+        n1 = int((assignments == 1).sum())
+        min_n = max(1, min(n0, n1))
+        max_n = max(n0, n1)
+        imbalanced = (max_n / min_n) > 3.0
+        old_w, new_w = (0.5, 0.5) if imbalanced else (0.7, 0.3)
         for i in range(len(self._centers)):
-            assigned = colors[np.array([self._classify(c) for c in colors]) == i]
+            assigned = colors[assignments == i]
             if len(assigned) > 2:
                 new_center = np.median(assigned, axis=0)
-                self._centers[i] = 0.7 * self._centers[i] + 0.3 * new_center
+                self._centers[i] = old_w * self._centers[i] + new_w * new_center
+
+    def classify_goalie(self, frame: np.ndarray, goalie: TrackedObject) -> Optional[str]:
+        """Classify a goalie's team using the same jersey-color model.
+
+        Goalies aren't part of the warmup clustering (their bulky equipment
+        alters the color histogram), but once the clusters are established we
+        can match a single goalie color sample against them.
+        """
+        if not self._is_warmed_up or self._centers is None:
+            return None
+        color = self._extract_jersey_color(frame, goalie)
+        if color is None:
+            return None
+        label = self._classify(color)
+        team = "team_a" if label == 0 else "team_b"
+        # Track goalie votes the same way we track players so repeated
+        # classifications converge.
+        self._accumulate_vote(goalie.track_id, label)
+        return team
 
     def summary(self) -> dict:
         team_a_ids = [tid for tid, t in self._team_map.items() if t == "team_a"]

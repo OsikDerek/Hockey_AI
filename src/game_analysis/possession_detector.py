@@ -28,7 +28,7 @@ class PossessionDetector:
         proximity_threshold: float = 120,
         hysteresis_window: int = 8,
         momentum_weight: float = 0.3,
-        coast_frames: int = 10,
+        coast_frames: int = 5,
     ):
         """
         Args:
@@ -152,8 +152,9 @@ class PossessionDetector:
 
         winner = max(counts, key=counts.get)
 
-        # Require at least 30% of window to claim possession
-        if counts[winner] < len(self._possession_history) * 0.3:
+        # Require at least 50% of window to claim possession (stricter majority
+        # avoids flicker when two players are contesting the puck)
+        if counts[winner] < len(self._possession_history) * 0.5:
             return None
 
         return winner

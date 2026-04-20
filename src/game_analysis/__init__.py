@@ -138,6 +138,12 @@ def run_game_analysis_mode(args, meta):
         # Team classification
         if is_gameplay:
             team_assignments = team_classifier.update(frame, players)
+            # Also classify goalies against the established cluster centers
+            # so shot_vs_pass and other detectors can identify the defending goalie
+            for g in goalies:
+                g_team = team_classifier.classify_goalie(frame, g)
+                if g_team is not None:
+                    team_assignments[g.track_id] = g_team
         else:
             team_assignments = {}
 
@@ -155,6 +161,7 @@ def run_game_analysis_mode(args, meta):
             possession_player_id=possession_id,
             is_gameplay=is_gameplay,
             is_camera_cut=is_camera_cut,
+            team_assignments=dict(team_assignments),
         )
 
         # Feed to decision detectors
@@ -311,6 +318,7 @@ def run_game_analysis_mode(args, meta):
                     ctx.players, carrier_obj, ctx.goalies,
                     out_w, out_h,
                     teammates=teammates, opponents=opponents,
+                    zone=ctx.zone,
                 )
                 if open_spaces:
                     _vis_counts["open_spaces"] += 1

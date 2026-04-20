@@ -60,9 +60,7 @@ class ShotVsPassDetector:
             self._offensive_streak += 1
         else:
             self._offensive_streak = 0
-
-        if self._cooldown > 0:
-            self._cooldown -= 1
+        # Note: cooldown is managed in _check_frame during analyze()
 
     def analyze(self, fps: float) -> list:
         """Detect all shot/pass events."""
@@ -78,6 +76,11 @@ class ShotVsPassDetector:
     def _check_frame(self, idx: int, fps: float) -> Optional[GameEvent]:
         """Check if a shot/pass event occurs at this frame."""
         ctx = self._frames[idx]
+
+        # Throttle via cooldown: don't emit another release within 15 frames
+        if self._cooldown > 0:
+            self._cooldown -= 1
+            return None
 
         # Must be in offensive zone with possession
         if ctx.zone != "offensive":
@@ -100,10 +103,14 @@ class ShotVsPassDetector:
         velocity = np.linalg.norm(curr - prev)
         prev_velocity = np.linalg.norm(prev - prev2)
 
+        # FPS-normalize threshold (detector was tuned for 30fps footage)
+        fps_scale = fps / 30.0
+        threshold = self.velocity_threshold * fps_scale
+
         # Detect velocity spike (puck was slow, now fast = release)
-        if velocity < self.velocity_threshold:
+        if velocity < threshold:
             return None
-        if prev_velocity > self.velocity_threshold * 0.7:
+        if prev_velocity > threshold * 0.7:
             return None  # Already moving fast, not a new release
 
         # Classify: shot vs pass vs dump
@@ -117,6 +124,9 @@ class ShotVsPassDetector:
 
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
+
+        # Set cooldown so we don't re-emit on the following frames of the same release
+        self._cooldown = 15
 
         return GameEvent(
             event_type="shot_vs_pass",
@@ -142,11 +152,13 @@ class ShotVsPassDetector:
         puck_direction = puck_pos - prev_pos
         puck_dir_norm = puck_direction / (np.linalg.norm(puck_direction) + 1e-8)
 
-        # Check if puck is moving toward goal
-        # In broadcast view, goals are typically at the edges of the frame
-        # If we have goalies detected, use their position
-        if ctx.goalies:
-            goalie_pos = np.array(ctx.goalies[0].center)
+        possessing_id = ctx.possession_player_id
+        carrier_team = ctx.team_assignments.get(possessing_id) if ctx.team_assignments else None
+
+        # Check if puck is moving toward the DEFENDING goalie (goalie whose team != carrier's team)
+        defending_goalie = self._select_defending_goalie(ctx, prev_pos, carrier_team)
+        if defending_goalie is not None:
+            goalie_pos = np.array(defending_goalie.center)
             to_goal = goalie_pos - prev_pos
             to_goal_norm = to_goal / (np.linalg.norm(to_goal) + 1e-8)
 
@@ -155,11 +167,15 @@ class ShotVsPassDetector:
             if goal_alignment > 0.5:
                 return "shot"
 
-        # Check if puck is moving toward another player
-        possessing_id = ctx.possession_player_id
+        # Check if puck is moving toward a TEAMMATE (same team as carrier)
+        # If team labels aren't available (warmup), fall back to any non-carrier player
         for player in ctx.players:
             if player.track_id == possessing_id:
                 continue
+            if carrier_team is not None:
+                player_team = ctx.team_assignments.get(player.track_id)
+                if player_team != carrier_team:
+                    continue  # Skip opponents as pass targets
             player_pos = np.array(player.center)
             to_player = player_pos - prev_pos
             dist_to_player = np.linalg.norm(to_player)
@@ -174,13 +190,46 @@ class ShotVsPassDetector:
 
         return "dump"
 
+    def _select_defending_goalie(
+        self, ctx: FrameContext, carrier_pos: np.ndarray, carrier_team: Optional[str]
+    ) -> Optional[TrackedObject]:
+        """Pick the goalie that defends against the carrier.
+
+        If team labels are available, pick the goalie NOT on the carrier's team.
+        Otherwise fall back to the goalie farther from the carrier
+        (the defending goalie is typically across the rink).
+        """
+        if not ctx.goalies:
+            return None
+        if carrier_team is not None and ctx.team_assignments:
+            for g in ctx.goalies:
+                g_team = ctx.team_assignments.get(g.track_id)
+                if g_team is not None and g_team != carrier_team:
+                    return g
+        # Fallback: pick the farthest goalie (defending goalie is across the rink from carrier)
+        best = None
+        best_dist = -1.0
+        for g in ctx.goalies:
+            d = float(np.linalg.norm(np.array(g.center) - carrier_pos))
+            if d > best_dist:
+                best_dist = d
+                best = g
+        return best
+
     def _count_lane_blockers(self, idx: int, ctx: FrameContext) -> int:
         """Count players between puck and goal (rough shooting lane check)."""
         if not ctx.goalies or ctx.puck is None:
             return 0
 
         puck_pos = np.array(ctx.puck.center)
-        goalie_pos = np.array(ctx.goalies[0].center)
+        carrier_team = (
+            ctx.team_assignments.get(ctx.possession_player_id)
+            if ctx.team_assignments else None
+        )
+        defending_goalie = self._select_defending_goalie(ctx, puck_pos, carrier_team)
+        if defending_goalie is None:
+            return 0
+        goalie_pos = np.array(defending_goalie.center)
 
         # Line from puck to goal
         lane_vec = goalie_pos - puck_pos

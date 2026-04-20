@@ -52,6 +52,7 @@ class FrameContext:
     possession_player_id: Optional[int] = None        # track_id of possessing player
     is_gameplay: bool = True
     is_camera_cut: bool = False
+    team_assignments: dict = field(default_factory=dict)  # track_id -> "team_a" | "team_b"
 
 
 @dataclass
