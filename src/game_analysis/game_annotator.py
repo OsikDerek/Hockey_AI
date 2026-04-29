@@ -238,20 +238,32 @@ class GameAnnotator:
             x1, y1, x2, y2 = [int(v) for v in obj.bbox]
 
             # -- Puck: bright green box + highlight circle --
+            # Ghost pucks (confidence == 0.0) come from the coast logic in
+            # PuckFilter when YOLO drops the puck for a frame or two; render
+            # them with a dashed circle and dimmer color so the user can see
+            # at a glance which frames are real detections vs coasted.
             if obj.class_name == "puck":
-                cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 255, 0), 3)
-                # Highlight circle around puck
+                is_ghost = obj.confidence <= 0.001
                 pcx = (x1 + x2) // 2
                 pcy = (y1 + y2) // 2
                 radius = max(12, (x2 - x1 + y2 - y1) // 2)
-                cv2.circle(frame, (pcx, pcy), radius, (0, 255, 0), 2)
-                cv2.circle(frame, (pcx, pcy), radius + 4, (0, 200, 0), 1)
-                # Label
-                label = "PUCK"
-                sz = cv2.getTextSize(label, self.font, 0.5, 2)[0]
-                ly = max(y1 - 6, sz[1] + 4)
-                cv2.rectangle(frame, (x1, ly - sz[1] - 3), (x1 + sz[0] + 6, ly + 3), (0, 180, 0), -1)
-                cv2.putText(frame, label, (x1 + 3, ly), self.font, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+                if is_ghost:
+                    # Dashed outline, no filled rectangle, dimmer color
+                    self._draw_dashed_circle(frame, (pcx, pcy), radius, (0, 180, 0), thickness=2, dash_count=12)
+                    label = "PUCK*"
+                    sz = cv2.getTextSize(label, self.font, 0.5, 2)[0]
+                    ly = max(y1 - 6, sz[1] + 4)
+                    cv2.rectangle(frame, (x1, ly - sz[1] - 3), (x1 + sz[0] + 6, ly + 3), (0, 120, 0), -1)
+                    cv2.putText(frame, label, (x1 + 3, ly), self.font, 0.5, (220, 220, 220), 2, cv2.LINE_AA)
+                else:
+                    cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 255, 0), 3)
+                    cv2.circle(frame, (pcx, pcy), radius, (0, 255, 0), 2)
+                    cv2.circle(frame, (pcx, pcy), radius + 4, (0, 200, 0), 1)
+                    label = "PUCK"
+                    sz = cv2.getTextSize(label, self.font, 0.5, 2)[0]
+                    ly = max(y1 - 6, sz[1] + 4)
+                    cv2.rectangle(frame, (x1, ly - sz[1] - 3), (x1 + sz[0] + 6, ly + 3), (0, 180, 0), -1)
+                    cv2.putText(frame, label, (x1 + 3, ly), self.font, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
                 continue
 
             # -- Players: white box + colored team stripe --
@@ -635,6 +647,16 @@ class GameAnnotator:
             start = (int(x1 + dx * t0), int(y1 + dy * t0))
             end = (int(x1 + dx * t1), int(y1 + dy * t1))
             cv2.line(frame, start, end, color, thickness, cv2.LINE_AA)
+
+    def _draw_dashed_circle(self, frame, center, radius, color, thickness=2, dash_count=12):
+        """Draw a dashed circle (ghost-puck marker)."""
+        cx, cy = int(center[0]), int(center[1])
+        for i in range(0, dash_count, 2):
+            a0 = (i / dash_count) * 2 * np.pi
+            a1 = ((i + 1) / dash_count) * 2 * np.pi
+            p0 = (int(cx + radius * np.cos(a0)), int(cy + radius * np.sin(a0)))
+            p1 = (int(cx + radius * np.cos(a1)), int(cy + radius * np.sin(a1)))
+            cv2.line(frame, p0, p1, color, thickness, cv2.LINE_AA)
 
     def _draw_pct_badge(self, frame, center, text, color, radius=24):
         """Draw a filled circle with percentage text inside.

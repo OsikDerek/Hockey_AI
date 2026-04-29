@@ -10,6 +10,7 @@ from typing import Optional
 from pathlib import Path
 
 from .game_context import TrackedObject
+from .puck_filter import PuckFilter
 
 
 # HockeyAI model class mapping
@@ -65,6 +66,9 @@ class GameTracker:
             self.class_names = self.model.names
         print(f"  GameTracker: Model loaded with classes: {self.class_names}")
 
+        # Single-puck enforcement + on-ice filtering + short coast on dropouts
+        self.puck_filter = PuckFilter()
+
         self._frame_count = 0
 
     def process_frame(
@@ -101,9 +105,19 @@ class GameTracker:
             results = self.model(frame, conf=self.conf, verbose=False)
 
         if not results or len(results) == 0:
-            return []
+            objects = []
+        else:
+            objects = self._parse_results(results[0])
 
-        return self._parse_results(results[0])
+        # Single-puck enforcement + on-ice filter + short coast.
+        # On camera cut, reset coast state so we don't synthesize a ghost
+        # at a position from a totally different angle.
+        if is_camera_cut:
+            self.puck_filter._last_pos = None
+            self.puck_filter._frames_since_seen = 9999
+
+        objects = self.puck_filter.filter(objects, frame)
+        return objects
 
     def _parse_results(self, result) -> list:
         """Convert ultralytics result to list of TrackedObject."""
