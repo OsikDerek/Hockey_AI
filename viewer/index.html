@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Hockey AI 3D Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="ui-top">
+    <div class="camera-controls">
+      <button data-cam="topdown" class="active">Top-Down</button>
+      <button data-cam="broadcast">Broadcast</button>
+      <button data-cam="pov">POV</button>
+      <select id="pov-player" disabled>
+        <option value="">Pick player...</option>
+      </select>
+    </div>
+    <div class="data-info">
+      <input type="file" id="file-picker" accept=".json" />
+      <span id="data-status">No data loaded</span>
+    </div>
+  </div>
+
+  <div id="ui-bottom">
+    <button id="play-btn">Play</button>
+    <input type="range" id="scrubber" min="0" max="0" value="0" step="1" />
+    <span id="frame-counter">0 / 0</span>
+    <span id="time-counter">0.00s</span>
+    <select id="speed">
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+    </select>
+  </div>
+
+  <script type="module" src="viewer.js"></script>
+</body>
+</html>

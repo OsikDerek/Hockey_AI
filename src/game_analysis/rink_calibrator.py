@@ -1,21 +1,29 @@
 """Pixel <-> ice coordinate calibration from detected rink landmarks.
 
 Phase B0 uses a 2D similarity transform (translation + rotation + uniform
-scale) anchored on the two goal x-positions and the centroid (center ice).
-This is less accurate than a full perspective homography (it can't correct
-for camera tilt that compresses the far side of the rink) but it's robust
-when only a handful of landmarks are visible per frame, which is the
-common case in broadcast follow-cam footage.
+scale) anchored on the goal positions and centroid. Phase B0.5 stabilizes
+that transform across frames so player positions on the minimap (and the
+3D viewer in Phase C) move smoothly instead of teleporting.
+
+Stability strategies (B0.5):
+1. **EMA smoothing**: blend each new fit into the previous transform
+   instead of replacing it outright.
+2. **Outlier rejection**: drop a fit if its scale changes >50% or its
+   origin jumps >200 px from the previous transform — broadcast cameras
+   don't actually do that.
+3. **Side disambiguation by prediction**: when a single goal is visible
+   and we already have a previous transform, pick the goal-side guess
+   whose predicted pixel position is closest to the observed goal.
+4. **Hard reset on camera cuts**: caller must invoke .reset() when
+   `is_camera_cut` is true so we don't blend across angle changes.
 
 Phase B1 will upgrade to a full 8-DoF homography once we solve the
-faceoff-dot identification problem (the YOLO model labels all 8 faceoff
-dots as a single class).
+faceoff-dot identification problem.
 
 Ice coordinates use the standard NHL convention: x in [0, 200] running
 goal-line to goal-line, y in [0, 85] running board-to-board, units feet.
 """
 
-from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -24,8 +32,8 @@ import numpy as np
 # NHL rink geometry (feet)
 RINK_LENGTH_FT = 200.0
 RINK_WIDTH_FT = 85.0
-GOAL_LINE_FROM_END_FT = 11.0           # goal line is 11 ft from each end board
-NHL_GOAL_WIDTH_FT = 6.0                # NHL regulation goal is 6 ft wide
+GOAL_LINE_FROM_END_FT = 11.0
+NHL_GOAL_WIDTH_FT = 6.0
 LEFT_GOAL_X_FT = GOAL_LINE_FROM_END_FT
 RIGHT_GOAL_X_FT = RINK_LENGTH_FT - GOAL_LINE_FROM_END_FT  # 189
 CENTER_X_FT = RINK_LENGTH_FT / 2.0     # 100
@@ -35,25 +43,25 @@ BLUE_LINE_RIGHT_X_FT = 125.0
 
 
 class RinkCalibrator:
-    """Maintain a running pixel<->ice similarity transform.
+    """Maintain a smoothed pixel<->ice similarity transform across frames."""
 
-    Update once per frame with the rink landmarks dict (FrameContext format).
-    Once enough samples accumulate, builds a transform that can map between
-    pixel coordinates and ice (feet) coordinates either way.
-    """
-
-    def __init__(self, recalibrate_every: int = 300, history_size: int = 100):
-        self.recalibrate_every = recalibrate_every
-        self._left_goal_xs: deque = deque(maxlen=history_size)
-        self._right_goal_xs: deque = deque(maxlen=history_size)
-        self._goal_ys: deque = deque(maxlen=history_size)        # average goal y, for rotation
-        self._center_xs: deque = deque(maxlen=history_size)
-        self._center_ys: deque = deque(maxlen=history_size)
+    def __init__(
+        self,
+        ema_alpha: float = 0.15,                 # weight of new fit (0=hold, 1=replace)
+        max_scale_change: float = 0.5,           # reject fit if scale changes by >50%
+        max_origin_jump_px: float = 200.0,       # reject fit if origin moves >200 px
+        min_scale_px_per_ft: float = 2.0,        # plausibility floor (rink 4x frame width)
+        max_scale_px_per_ft: float = 25.0,       # plausibility ceiling (rink 0.4x frame width)
+    ):
+        self.ema_alpha = ema_alpha
+        self.max_scale_change = max_scale_change
+        self.max_origin_jump_px = max_origin_jump_px
+        self.min_scale_px_per_ft = min_scale_px_per_ft
+        self.max_scale_px_per_ft = max_scale_px_per_ft
 
         # Similarity transform parameters: ice (x_ft, y_ft) -> pixel (px, py)
         # px = origin_px[0] + scale * (cos*x_ft - sin*y_ft)
         # py = origin_px[1] + scale * (sin*x_ft + cos*y_ft)
-        # Where origin is the pixel position of ice (0, 0).
         self._origin_px: Optional[np.ndarray] = None
         self._scale_px_per_ft: Optional[float] = None
         self._cos: float = 1.0
@@ -66,12 +74,7 @@ class RinkCalibrator:
         return self._calibrated
 
     def reset(self) -> None:
-        """Clear all calibration state — call on hard scene change."""
-        self._left_goal_xs.clear()
-        self._right_goal_xs.clear()
-        self._goal_ys.clear()
-        self._center_xs.clear()
-        self._center_ys.clear()
+        """Clear all calibration state — call on camera cut."""
         self._origin_px = None
         self._scale_px_per_ft = None
         self._cos = 1.0
@@ -79,122 +82,174 @@ class RinkCalibrator:
         self._calibrated = False
 
     def update(self, rink_landmarks: dict, frame_width: int, frame_height: int) -> None:
-        """Per-frame calibration update.
-
-        Broadcast follow-cam rarely shows both goals at once, so we cannot
-        accumulate left/right goal positions across frames (they'd come from
-        different camera angles and produce nonsense scale). Instead, we
-        try to fit a transform from THIS frame's landmarks alone, and hold
-        the previous transform when this frame doesn't have enough.
-
-        Per-frame strategies, in order of preference:
-        1. Both left + right goal visible: scale from goal-to-goal pixel
-           distance (most accurate when available).
-        2. One goal + centroid: scale from goal-to-centroid pixel distance
-           (the common broadcast case — camera follows the play to one end).
-        3. Hold previous transform.
-        """
+        """Per-frame calibration update with smoothing + outlier rejection."""
         self._frame_count += 1
 
         goals = [g for g in rink_landmarks.get("goal", []) if g.confidence >= 0.4]
         centroids = [c for c in rink_landmarks.get("centroid", []) if c.confidence >= 0.4]
 
-        # Split goals into left/right of frame center (best we can do
-        # without explicit handedness)
-        left_goals = [g for g in goals if g.center[0] < frame_width / 2.0]
-        right_goals = [g for g in goals if g.center[0] >= frame_width / 2.0]
+        # Reject obviously bad goal detections (the bbox aspect ratio of a
+        # real net is roughly square; far-zoom misdetections are often
+        # vertical slivers or thin strips).
+        goals = [g for g in goals if self._goal_bbox_plausible(g)]
 
+        # Side-bin goals using the previous transform if we have one;
+        # otherwise fall back to frame-half.
+        left_goals, right_goals = self._bin_goals_by_side(goals, frame_width)
+
+        candidate = None
         if left_goals and right_goals:
-            self._fit_from_two_goals(left_goals[0], right_goals[0], centroids, frame_height)
+            candidate = self._fit_from_two_goals(left_goals[0], right_goals[0], centroids)
         elif goals and centroids:
-            self._fit_from_goal_and_centroid(goals[0], centroids[0])
+            candidate = self._fit_from_goal_and_centroid(goals[0], centroids[0])
         elif goals:
-            # Last resort: a single goal alone. Use the known regulation
-            # goal-frame width (6 ft) to derive scale, place the goal at its
-            # known ice x-coord, anchor y=42.5 ft to the goal's pixel y.
-            self._fit_from_single_goal(goals[0], frame_width)
-        # else: hold whatever transform we already have
+            candidate = self._fit_from_single_goal(goals[0], frame_width)
 
-    def _fit_from_two_goals(self, left_goal, right_goal, centroids: list, frame_height: int) -> None:
+        if candidate is None:
+            return  # No new info this frame; hold previous transform
+
+        # Plausibility floor / ceiling on the absolute scale — rejects
+        # fits that would imply an absurd rink size in the frame.
+        cand_scale = candidate[1]
+        if not (self.min_scale_px_per_ft <= cand_scale <= self.max_scale_px_per_ft):
+            return
+
+        # Outlier rejection (only meaningful once we have a previous fit)
+        if self._calibrated and not self._fit_is_plausible(candidate):
+            return
+
+        # Apply the candidate. First fit replaces; subsequent fits blend via EMA.
+        if not self._calibrated:
+            self._apply_fit(candidate, alpha=1.0)
+        else:
+            self._apply_fit(candidate, alpha=self.ema_alpha)
+        self._calibrated = True
+
+    # ── Fit candidates: each returns a tuple (origin_px, scale, cos, sin) ──
+    def _fit_from_two_goals(self, left_goal, right_goal, centroids: list):
         left_x, left_y = left_goal.center
         right_x, right_y = right_goal.center
         goal_axis_px = right_x - left_x
         if goal_axis_px <= 1.0:
-            return
-        ice_axis_ft = RIGHT_GOAL_X_FT - LEFT_GOAL_X_FT  # 178 ft
-        self._scale_px_per_ft = goal_axis_px / ice_axis_ft
-        self._cos = 1.0
-        self._sin = 0.0
-        # Use centroid y if visible; else average of the two goal ys
+            return None
+        scale = goal_axis_px / (RIGHT_GOAL_X_FT - LEFT_GOAL_X_FT)
         line_y_px = float(centroids[0].center[1]) if centroids else (left_y + right_y) / 2.0
-        origin_x = left_x - LEFT_GOAL_X_FT * self._scale_px_per_ft
-        origin_y = line_y_px - CENTER_Y_FT * self._scale_px_per_ft
-        self._origin_px = np.array([origin_x, origin_y], dtype=np.float64)
-        self._calibrated = True
+        origin_x = left_x - LEFT_GOAL_X_FT * scale
+        origin_y = line_y_px - CENTER_Y_FT * scale
+        return (np.array([origin_x, origin_y], dtype=np.float64), float(scale), 1.0, 0.0)
 
-    def _fit_from_single_goal(self, goal, frame_width: int) -> None:
-        gx, gy = goal.center
-        gx1, _, gx2, _ = goal.bbox
-        goal_width_px = float(gx2 - gx1)
-        if goal_width_px <= 1.0:
-            return
-        self._scale_px_per_ft = goal_width_px / NHL_GOAL_WIDTH_FT
-        self._cos = 1.0
-        self._sin = 0.0
-        # Decide which goal this is by frame-half. This is a heuristic:
-        # if the camera is mostly looking at one end, the goal there will
-        # appear roughly centered; we still need a side guess. Use frame
-        # half — same convention as elsewhere.
-        goal_ice_x = LEFT_GOAL_X_FT if gx < frame_width / 2.0 else RIGHT_GOAL_X_FT
-        origin_x = gx - goal_ice_x * self._scale_px_per_ft
-        origin_y = gy - CENTER_Y_FT * self._scale_px_per_ft
-        self._origin_px = np.array([origin_x, origin_y], dtype=np.float64)
-        self._calibrated = True
-
-    def _fit_from_goal_and_centroid(self, goal, centroid) -> None:
+    def _fit_from_goal_and_centroid(self, goal, centroid):
         gx, gy = goal.center
         cx, cy = centroid.center
-        # Determine which side this goal is on by comparing x to centroid x
-        if gx < cx:
-            goal_ice_x = LEFT_GOAL_X_FT
-        else:
-            goal_ice_x = RIGHT_GOAL_X_FT
-        ice_axis_ft = abs(CENTER_X_FT - goal_ice_x)  # 89 ft
+        goal_ice_x = LEFT_GOAL_X_FT if gx < cx else RIGHT_GOAL_X_FT
+        ice_axis_ft = abs(CENTER_X_FT - goal_ice_x)
         goal_axis_px = abs(cx - gx)
         if goal_axis_px <= 1.0:
-            return
-        self._scale_px_per_ft = goal_axis_px / ice_axis_ft
-        self._cos = 1.0
-        self._sin = 0.0
-        # The line through goal and centroid is the rink centerline (y=42.5).
-        # Use centroid's y as the centerline.
-        line_y_px = float(cy)
-        # Origin in pixel space: subtract LEFT_GOAL or RIGHT_GOAL contribution
-        # appropriately. Both reference points lie on the centerline, so the
-        # origin x simply offsets from the goal we have.
-        if goal_ice_x == LEFT_GOAL_X_FT:
-            origin_x = gx - LEFT_GOAL_X_FT * self._scale_px_per_ft
-        else:
-            origin_x = gx - RIGHT_GOAL_X_FT * self._scale_px_per_ft
-        origin_y = line_y_px - CENTER_Y_FT * self._scale_px_per_ft
-        self._origin_px = np.array([origin_x, origin_y], dtype=np.float64)
-        self._calibrated = True
+            return None
+        scale = goal_axis_px / ice_axis_ft
+        origin_x = gx - goal_ice_x * scale
+        origin_y = float(cy) - CENTER_Y_FT * scale
+        return (np.array([origin_x, origin_y], dtype=np.float64), float(scale), 1.0, 0.0)
 
+    def _fit_from_single_goal(self, goal, frame_width: int):
+        """Single-goal observations only refine the origin, never scale.
+
+        Goal-bbox width is too noisy (varies heavily with camera zoom and
+        partial occlusion) to derive scale reliably. We only use single-goal
+        observations to track camera pan — translating the origin without
+        changing the scale that was set by a more reliable fit.
+        """
+        if self._scale_px_per_ft is None or not self._calibrated:
+            # No previous scale to anchor to — refuse to fit at all.
+            return None
+        gx, gy = goal.center
+        scale = self._scale_px_per_ft
+        goal_ice_x = self._best_goal_side_guess(gx, frame_width)
+        origin_x = gx - goal_ice_x * scale
+        origin_y = gy - CENTER_Y_FT * scale
+        return (np.array([origin_x, origin_y], dtype=np.float64), float(scale), 1.0, 0.0)
+
+    # ── Helpers ──
+    def _bin_goals_by_side(self, goals: list, frame_width: int):
+        """Split detected goals into left-side / right-side groups."""
+        if not self._calibrated or self._origin_px is None or self._scale_px_per_ft is None:
+            half = frame_width / 2.0
+            left = [g for g in goals if g.center[0] < half]
+            right = [g for g in goals if g.center[0] >= half]
+            return left, right
+        # Use the existing transform to predict where each goal-side SHOULD
+        # appear, then assign each detection to whichever predicted side is
+        # closer.
+        left_pred = self.ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
+        right_pred = self.ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
+        left, right = [], []
+        for g in goals:
+            gx = g.center[0]
+            d_left = abs(gx - left_pred[0]) if left_pred else float("inf")
+            d_right = abs(gx - right_pred[0]) if right_pred else float("inf")
+            if d_left <= d_right:
+                left.append(g)
+            else:
+                right.append(g)
+        return left, right
+
+    def _best_goal_side_guess(self, gx: float, frame_width: int) -> float:
+        """Pick LEFT_GOAL_X_FT or RIGHT_GOAL_X_FT for a single observed goal pixel."""
+        if self._calibrated and self._origin_px is not None and self._scale_px_per_ft is not None:
+            left_pred = self.ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
+            right_pred = self.ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
+            if left_pred is not None and right_pred is not None:
+                if abs(gx - left_pred[0]) <= abs(gx - right_pred[0]):
+                    return LEFT_GOAL_X_FT
+                return RIGHT_GOAL_X_FT
+        # Fallback: frame-half heuristic
+        return LEFT_GOAL_X_FT if gx < frame_width / 2.0 else RIGHT_GOAL_X_FT
+
+    @staticmethod
+    def _goal_bbox_plausible(goal) -> bool:
+        x1, y1, x2, y2 = goal.bbox
+        w = max(1.0, x2 - x1)
+        h = max(1.0, y2 - y1)
+        ratio = w / h
+        return 0.6 <= ratio <= 3.0
+
+    def _fit_is_plausible(self, candidate) -> bool:
+        new_origin, new_scale, _, _ = candidate
+        if self._scale_px_per_ft is None or self._origin_px is None:
+            return True
+        scale_change = abs(new_scale - self._scale_px_per_ft) / max(1e-6, self._scale_px_per_ft)
+        if scale_change > self.max_scale_change:
+            return False
+        origin_jump = float(np.linalg.norm(new_origin - self._origin_px))
+        if origin_jump > self.max_origin_jump_px:
+            return False
+        return True
+
+    def _apply_fit(self, candidate, alpha: float) -> None:
+        new_origin, new_scale, new_cos, new_sin = candidate
+        if self._origin_px is None or self._scale_px_per_ft is None or alpha >= 1.0:
+            self._origin_px = new_origin.copy()
+            self._scale_px_per_ft = new_scale
+            self._cos = new_cos
+            self._sin = new_sin
+            return
+        self._origin_px = (1.0 - alpha) * self._origin_px + alpha * new_origin
+        self._scale_px_per_ft = (1.0 - alpha) * self._scale_px_per_ft + alpha * new_scale
+        self._cos = (1.0 - alpha) * self._cos + alpha * new_cos
+        self._sin = (1.0 - alpha) * self._sin + alpha * new_sin
+
+    # ── Coordinate transforms ──
     def pixel_to_ice(self, pt) -> Optional[tuple]:
-        """Map a pixel (px, py) to ice (x_ft, y_ft). None if not calibrated."""
         if not self._calibrated or self._origin_px is None or self._scale_px_per_ft is None:
             return None
         px, py = float(pt[0]), float(pt[1])
         dx = px - self._origin_px[0]
         dy = py - self._origin_px[1]
-        # Inverse rotation (transpose for the rotation portion of the
-        # similarity), then divide out the scale.
         x_ft = (self._cos * dx + self._sin * dy) / self._scale_px_per_ft
         y_ft = (-self._sin * dx + self._cos * dy) / self._scale_px_per_ft
         return (float(x_ft), float(y_ft))
 
     def ice_to_pixel(self, pt) -> Optional[tuple]:
-        """Map ice (x_ft, y_ft) to pixel (px, py). None if not calibrated."""
         if not self._calibrated or self._origin_px is None or self._scale_px_per_ft is None:
             return None
         x_ft, y_ft = float(pt[0]), float(pt[1])

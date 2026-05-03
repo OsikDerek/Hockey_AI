@@ -1,0 +1,60 @@
+"""Tiny static HTTP server for the 3D viewer.
+
+The viewer needs to fetch *_positions.json files; browsers block fetch()
+on file:// URLs, so we have to serve everything over http. This script
+binds 127.0.0.1:8000 to the project root, prints a deep-link URL with
+the most recently produced positions JSON, and opens it in the default
+browser.
+"""
+
+import http.server
+import os
+import socketserver
+import sys
+import webbrowser
+from pathlib import Path
+from urllib.parse import quote
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PORT = 8000
+
+
+def find_latest_positions_json() -> Path | None:
+    out = PROJECT_ROOT / "output"
+    if not out.is_dir():
+        return None
+    candidates = sorted(out.glob("*_positions.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def main() -> int:
+    os.chdir(PROJECT_ROOT)
+    handler = http.server.SimpleHTTPRequestHandler
+
+    latest = find_latest_positions_json()
+    if latest is not None:
+        rel = latest.relative_to(PROJECT_ROOT).as_posix()
+        url = f"http://localhost:{PORT}/viewer/index.html?data=/{quote(rel)}"
+        print(f"Auto-opening latest positions: {rel}")
+    else:
+        url = f"http://localhost:{PORT}/viewer/index.html"
+        print("No *_positions.json found in output/. Open the picker in the page.")
+
+    print(f"Serving {PROJECT_ROOT} on {url}")
+    print("Ctrl+C to stop.")
+
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+    with socketserver.TCPServer(("127.0.0.1", PORT), handler) as httpd:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

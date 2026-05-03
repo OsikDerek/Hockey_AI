@@ -135,6 +135,11 @@ def run_game_analysis_mode(args, meta):
         referees = tracker.filter_by_class(objects, "referee")
         rink_landmarks = tracker.get_rink_landmarks(objects)
 
+        # Camera cuts swap angles, so the previous transform is meaningless.
+        # Hard-reset before re-fitting from this frame's landmarks.
+        if is_camera_cut:
+            rink_calibrator.reset()
+
         # Update pixel<->ice transform from this frame's landmarks, then
         # tag every detection with its ice (x_ft, y_ft) coords.
         rink_calibrator.update(rink_landmarks, meta["width"], meta["height"])
@@ -489,28 +494,47 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
     base = os.path.splitext(output_path)[0]
     json_path = f"{base}_positions.json"
 
+    # Clamp ice coords to a small margin around the rink so the 3D viewer
+    # doesn't have to deal with extreme outliers from imperfect calibration.
+    margin = 10.0
+    clamp_x_lo, clamp_x_hi = -margin, RINK_LENGTH_FT + margin
+    clamp_y_lo, clamp_y_hi = -margin, RINK_WIDTH_FT + margin
+
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, v))
+
+    out_of_rink_count = 0
+    total_xy_count = 0
+
     frames_out = []
     for i, ctx in enumerate(analysis.frame_contexts):
         teams = team_data[i] if i < len(team_data) else {}
 
         def _dump(obj):
+            nonlocal out_of_rink_count, total_xy_count
             if obj is None or obj.ice_xy is None:
                 return None
             ix, iy = obj.ice_xy
+            total_xy_count += 1
+            if not (0 <= ix <= RINK_LENGTH_FT and 0 <= iy <= RINK_WIDTH_FT):
+                out_of_rink_count += 1
             return {
                 "track_id": int(obj.track_id),
                 "team": teams.get(obj.track_id),
-                "ice_x": round(float(ix), 2),
-                "ice_y": round(float(iy), 2),
+                "ice_x": round(_clamp(float(ix), clamp_x_lo, clamp_x_hi), 2),
+                "ice_y": round(_clamp(float(iy), clamp_y_lo, clamp_y_hi), 2),
                 "confidence": round(float(obj.confidence), 3),
             }
 
         puck_record = None
         if ctx.puck is not None and ctx.puck.ice_xy is not None:
             ix, iy = ctx.puck.ice_xy
+            total_xy_count += 1
+            if not (0 <= ix <= RINK_LENGTH_FT and 0 <= iy <= RINK_WIDTH_FT):
+                out_of_rink_count += 1
             puck_record = {
-                "ice_x": round(float(ix), 2),
-                "ice_y": round(float(iy), 2),
+                "ice_x": round(_clamp(float(ix), clamp_x_lo, clamp_x_hi), 2),
+                "ice_y": round(_clamp(float(iy), clamp_y_lo, clamp_y_hi), 2),
                 "confidence": round(float(ctx.puck.confidence), 3),
             }
 
@@ -524,14 +548,23 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
             "goalies": [r for r in (_dump(g) for g in ctx.goalies) if r is not None],
         })
 
+    quality_pct = (
+        100.0 * (1.0 - out_of_rink_count / total_xy_count)
+        if total_xy_count > 0 else 0.0
+    )
     payload = {
         "rink": {"length_ft": RINK_LENGTH_FT, "width_ft": RINK_WIDTH_FT},
         "fps": meta.get("fps", 30.0),
+        "calibration_quality": {
+            "in_rink_pct": round(quality_pct, 1),
+            "total_xy_count": total_xy_count,
+            "out_of_rink_count": out_of_rink_count,
+        },
         "frames": frames_out,
     }
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
-    print(f"  Positions JSON: {json_path}")
+    print(f"  Positions JSON: {json_path} (in-rink: {quality_pct:.1f}%)")
 
 
 def _split_teams(players, carrier_id, team_assignments):
