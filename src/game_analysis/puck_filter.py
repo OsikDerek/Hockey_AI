@@ -35,7 +35,7 @@ class PuckFilter:
 
     def __init__(
         self,
-        min_conf: float = 0.30,
+        min_conf: float = 0.18,
         coast_frames: int = 5,
         ice_min_v: int = 180,
         ice_max_s: int = 60,

@@ -197,14 +197,38 @@ class LaneCalculator:
         opponents: list,
         frame_width: int,
         frame_height: int,
+        open_spaces: list = None,
+        open_space_radius: float = 110.0,
     ) -> list:
-        """Calculate subtle always-on connections from carrier to teammates.
+        """Always-on connections from carrier to every teammate.
 
-        Lighter version of calc_passing_lanes for persistent display
-        outside of decision events. Returns simplified lane info.
+        Binary outcome: "reachable" (green) or "blocked" (red). A teammate
+        is REACHABLE if ANY of these is true:
+          1. Direct passing lane has zero opponents in the lane corridor.
+          2. Nearest opponent to the teammate is farther than
+             `open_space_radius` (teammate is alone — sauce/flip/bank pass
+             can still get them the puck even if the direct lane is blocked).
+          3. Teammate's position falls inside a nav-mesh open pocket (from
+             space_detector.find_open_spaces).
+
+        Otherwise BLOCKED. Returns one entry per teammate (no distance
+        filtering — every teammate stays connected at all times).
         """
         connections = []
         start = carrier.center
+
+        # Pre-extract open-pocket cells for fast point-in-pocket checks.
+        # Each pocket dict has "center" (cx, cy), "roominess" (peak distance
+        # to nearest node). We approximate "inside pocket" as "within
+        # roominess radius of pocket center" -- close enough for receiver
+        # placement.
+        pockets = []
+        if open_spaces:
+            for sp in open_spaces:
+                center = sp.get("center")
+                roominess = float(sp.get("roominess", 0.0)) or float(sp.get("gap_width", 0.0)) / 2.0
+                if center is not None and roominess > 0:
+                    pockets.append((np.array(center, dtype=np.float32), roominess))
 
         for teammate in teammates:
             if teammate.track_id < 0:
@@ -212,22 +236,45 @@ class LaneCalculator:
 
             end = teammate.center
             distance = float(np.linalg.norm(np.array(end) - np.array(start)))
-            if distance < 10:
-                continue
+            tpos = np.array(teammate.center, dtype=np.float32)
 
-            # Quick blocker count
+            # Single pass over opponents: count direct-lane blockers AND
+            # find the nearest opponent to the teammate. Hot path — avoid
+            # iterating opponents twice per teammate.
             n_blockers = 0
+            nearest_opp_dist = float("inf")
             for opp in opponents:
-                perp_dist, t = _point_to_line_distance(opp.center, start, end)
+                opp_center = opp.center
+                perp_dist, t = _point_to_line_distance(opp_center, start, end)
                 if 0.0 < t < 1.0 and perp_dist < self.lane_block_radius:
                     n_blockers += 1
+                d = float(np.linalg.norm(tpos - np.array(opp_center, dtype=np.float32)))
+                if d < nearest_opp_dist:
+                    nearest_opp_dist = d
 
+            # Inside a nav-mesh open pocket?
+            in_pocket = False
+            for pcenter, roominess in pockets:
+                if float(np.linalg.norm(tpos - pcenter)) < roominess:
+                    in_pocket = True
+                    break
+
+            reachable = (
+                n_blockers == 0
+                or nearest_opp_dist > open_space_radius
+                or in_pocket
+            )
+            quality = "reachable" if reachable else "blocked"
+
+            # Reason tag (helps debugging / tooltips)
             if n_blockers == 0:
-                quality = "open"
-            elif n_blockers == 1:
-                quality = "partial"
+                reason = "direct lane"
+            elif nearest_opp_dist > open_space_radius:
+                reason = f"alone ({nearest_opp_dist:.0f}px)"
+            elif in_pocket:
+                reason = "in open pocket"
             else:
-                quality = "covered"
+                reason = f"{n_blockers} in lane"
 
             connections.append({
                 "target_id": teammate.track_id,
@@ -235,6 +282,9 @@ class LaneCalculator:
                 "end": end,
                 "quality": quality,
                 "distance": distance,
+                "num_blockers": n_blockers,
+                "nearest_opp_dist": nearest_opp_dist,
+                "reason": reason,
             })
 
         return connections

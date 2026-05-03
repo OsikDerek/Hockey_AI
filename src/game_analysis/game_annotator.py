@@ -45,11 +45,10 @@ LANE_COLORS = {
     "covered": (0, 0, 200),      # Red
 }
 
-# Ambient connection colors (subtle)
+# Ambient connection colors — binary green (puck can reach) / red (blocked)
 AMBIENT_COLORS = {
-    "open": (0, 120, 0),         # Dark green
-    "partial": (0, 120, 120),    # Dark yellow
-    "covered": (0, 0, 120),      # Dark red
+    "reachable": (0, 220, 0),    # Bright green
+    "blocked":   (0, 0, 220),    # Bright red
 }
 
 
@@ -81,6 +80,11 @@ class GameAnnotator:
         self.lane_calculator = LaneCalculator()
         self.space_detector = SpaceDetector()
         self.goalie_analyzer = GoalieAnalyzer()
+        # Cache of the most recently seen goalie object — used so freeze
+        # frames still draw sight lines when YOLO drops the goalie for that
+        # specific frame.
+        self._last_goalie: Optional["object"] = None
+        self._last_goalie_age: int = 999
 
     def set_team_assignments(self, assignments: dict):
         """Update the current team assignment map."""
@@ -112,28 +116,76 @@ class GameAnnotator:
         if context.is_camera_cut:
             self._draw_camera_cut(annotated)
 
-        # Open space overlay (draw first so it's behind everything)
-        if open_spaces:
+        # Update goalie cache (so freeze frames can fall back to it when
+        # YOLO drops the goalie for that single frame)
+        if context.goalies:
+            self._last_goalie = context.goalies[0]
+            self._last_goalie_age = 0
+        else:
+            self._last_goalie_age += 1
+
+        # Open space overlay (draw first so it's behind everything).
+        # Skipped during shootout-like 1v1s — the gap structure is meaningless.
+        if open_spaces and not context.is_shootout_like:
             self._draw_open_spaces(annotated, open_spaces)
 
         if self.show_boxes:
             self._draw_objects(annotated, context)
 
-        if self.show_zone and context.zone:
+        # Zone banner suppressed during shootout-like frames
+        if self.show_zone and context.zone and not context.is_shootout_like:
             self._draw_zone_banner(annotated, context.zone)
 
         if context.possession_player_id is not None:
             self._draw_possession(annotated, context)
 
-        # Always-on ambient connections from carrier to teammates
+        # Always-on green/red carrier-to-teammate lines
         if ambient_connections:
             self._draw_ambient_connections(annotated, ambient_connections)
+
+        # Always-on goalie sight lines on shootout-like frames (no event needed)
+        if context.is_shootout_like:
+            self._draw_shootout_sight_lines(annotated, context)
 
         if events:
             self._draw_events(annotated, events)
 
         self._draw_frame_info(annotated, context)
         return annotated
+
+    @staticmethod
+    def _find_player_by_id(players, track_id):
+        """Find a tracked player by track_id. None if not in the list."""
+        if track_id is None:
+            return None
+        for p in players:
+            if p.track_id == track_id:
+                return p
+        return None
+
+    def _draw_shootout_sight_lines(self, frame, context):
+        """Draw always-on goalie sight lines during shootout-style 1-on-1s.
+
+        Picks the lone non-goalie player as the carrier (or falls back to
+        possession_player_id) and the most recently seen goalie.
+        """
+        carrier_obj = self._find_player_by_id(context.players, context.possession_player_id)
+        if carrier_obj is None and len(context.players) == 1:
+            carrier_obj = context.players[0]
+        if carrier_obj is None:
+            return
+
+        goalie = context.goalies[0] if context.goalies else self._last_goalie
+        if goalie is None:
+            return
+
+        goal_lm = None
+        if context.rink_landmarks.get("goal"):
+            goal_lm = context.rink_landmarks["goal"][0]
+
+        h, w = frame.shape[:2]
+        analysis = self.goalie_analyzer.analyze_shootout(carrier_obj, goalie, goal_lm, w, h)
+        draw_goalie_analysis(frame, analysis)
 
     def render_coaching(
         self,
@@ -183,26 +235,29 @@ class GameAnnotator:
         lane_alpha = max(alpha, 0.55)
         cv2.addWeighted(overlay, lane_alpha, annotated, 1.0 - lane_alpha, 0, annotated)
 
-        # Goalie analysis during shooting-related events
+        # Goalie analysis during shooting-related events.
+        # Falls back to the most recently seen goalie (cached in self._last_goalie
+        # by render()) when YOLO drops the goalie on the freeze frame itself —
+        # otherwise the sight lines would never appear despite the event firing.
         event_type = event.event_type if event else ""
         is_shot_event = event_type in ("shot_vs_pass", "odd_man_rush", "missed_opportunity")
-        if is_shot_event and context.goalies and phase in ("slowdown", "freeze"):
-            # Find carrier
-            eid = event.player_id if event else context.possession_player_id
-            carrier_obj = None
-            for p in context.players:
-                if p.track_id == eid:
-                    carrier_obj = p
-                    break
-            if carrier_obj:
-                goal_lm = None
-                if context.rink_landmarks.get("goal"):
-                    goal_lm = context.rink_landmarks["goal"][0]
-                h, w = annotated.shape[:2]
-                goalie_data = self.goalie_analyzer.analyze_shot(
-                    carrier_obj, context.goalies[0], goal_lm, w, h
-                )
-                draw_goalie_analysis(annotated, goalie_data)
+        if is_shot_event and phase in ("slowdown", "freeze"):
+            goalie_for_analysis = (
+                context.goalies[0] if context.goalies
+                else (self._last_goalie if self._last_goalie_age <= 30 else None)
+            )
+            if goalie_for_analysis is not None:
+                eid = event.player_id if event else context.possession_player_id
+                carrier_obj = self._find_player_by_id(context.players, eid)
+                if carrier_obj:
+                    goal_lm = None
+                    if context.rink_landmarks.get("goal"):
+                        goal_lm = context.rink_landmarks["goal"][0]
+                    h, w = annotated.shape[:2]
+                    goalie_data = self.goalie_analyzer.analyze_shot(
+                        carrier_obj, goalie_for_analysis, goal_lm, w, h
+                    )
+                    draw_goalie_analysis(annotated, goalie_data)
 
         # Freeze frame special treatment
         if phase == "freeze" and event:

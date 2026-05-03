@@ -24,7 +24,7 @@ class BroadcastFilter:
     def __init__(
         self,
         cut_threshold: float = 0.4,
-        min_game_objects: int = 3,
+        min_game_objects: int = 2,
         non_gameplay_window: int = 15,
     ):
         """

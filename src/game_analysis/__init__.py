@@ -129,6 +129,19 @@ def run_game_analysis_mode(args, meta):
         referees = tracker.filter_by_class(objects, "referee")
         rink_landmarks = tracker.get_rink_landmarks(objects)
 
+        # Shootout-like context: a single (or breakaway pair of) attacker(s) +
+        # opposing goalie, with no real defensive structure on screen. When
+        # this is true we force gameplay = True so the shootout doesn't get
+        # filtered out, and downstream rendering suppresses zone banner +
+        # generic open-space markers (they convey nothing useful in a 1v1).
+        is_shootout_like = (
+            len(players) <= 2
+            and len(goalies) >= 1
+            and len(referees) <= 1
+        )
+        if is_shootout_like:
+            is_gameplay = True
+
         # Zone detection
         zone = zone_detector.update(objects, puck, meta["width"])
 
@@ -161,6 +174,7 @@ def run_game_analysis_mode(args, meta):
             possession_player_id=possession_id,
             is_gameplay=is_gameplay,
             is_camera_cut=is_camera_cut,
+            is_shootout_like=is_shootout_like,
             team_assignments=dict(team_assignments),
         )
 
@@ -299,21 +313,15 @@ def run_game_analysis_mode(args, meta):
                 ctx.players, carrier_id, team_data[i]
             )
 
-            # Ambient connections (always-on when there's a carrier)
-            ambient = None
+            # Open space detection first — drives both nav-mesh diamonds and
+            # the secondary "teammate inside a pocket" check used by ambient.
+            # Skipped on shootout-like frames (single attacker vs goalie has
+            # no meaningful gap structure to surface).
             carrier_obj = None
             if carrier_id is not None:
                 carrier_obj = _find_player(ctx.players, carrier_id)
-                if carrier_obj and teammates:
-                    ambient = annotator.lane_calculator.calc_ambient_connections(
-                        carrier_obj, teammates, opponents, out_w, out_h
-                    )
-                    if ambient:
-                        _vis_counts["ambient"] += 1
-
-            # Open space detection (always-on, subtle)
             open_spaces = None
-            if ctx.is_gameplay and len(ctx.players) >= 3:
+            if ctx.is_gameplay and not ctx.is_shootout_like and len(ctx.players) >= 3:
                 open_spaces = annotator.space_detector.find_open_spaces(
                     ctx.players, carrier_obj, ctx.goalies,
                     out_w, out_h,
@@ -322,6 +330,18 @@ def run_game_analysis_mode(args, meta):
                 )
                 if open_spaces:
                     _vis_counts["open_spaces"] += 1
+
+            # Always-on green/red connections from the carrier to every
+            # teammate. Reachable = direct lane open OR teammate alone OR
+            # teammate inside a nav-mesh open pocket.
+            ambient = None
+            if carrier_obj is not None and teammates:
+                ambient = annotator.lane_calculator.calc_ambient_connections(
+                    carrier_obj, teammates, opponents, out_w, out_h,
+                    open_spaces=open_spaces,
+                )
+                if ambient:
+                    _vis_counts["ambient"] += 1
 
             if phase_info is not None and annotator.coaching_mode:
                 # Coaching mode: calculate full lanes

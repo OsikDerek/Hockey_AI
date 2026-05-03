@@ -56,15 +56,32 @@ class GameTracker:
             )
 
         self.model = YOLO(model_path)
+        # Separate YOLO instance for the puck-only fallback. Calling predict()
+        # on the same instance corrupts the ByteTrack state for subsequent
+        # track() calls (track and predict share internal model state in
+        # ultralytics). A second instance is the simplest robust fix.
+        self.fallback_model = YOLO(model_path)
         self.conf = conf
         self.iou = iou
         self.tracker_config = tracker
+        # Fallback puck-only confidence: lowered threshold for the fallback
+        # YOLO call when the primary call returns no puck. The PuckFilter
+        # still rejects bad candidates via on-ice + proximity scoring.
+        self.puck_fallback_conf = 0.10
 
         # Verify class names match expected
         self.class_names = {}
         if hasattr(self.model, "names"):
             self.class_names = self.model.names
         print(f"  GameTracker: Model loaded with classes: {self.class_names}")
+
+        # Cache the puck class id from the model's class names map for fast
+        # filtered fallback predictions
+        self._puck_class_id = None
+        for cid, name in self.class_names.items():
+            if "puck" in str(name).lower():
+                self._puck_class_id = int(cid)
+                break
 
         # Single-puck enforcement + on-ice filtering + short coast on dropouts
         self.puck_filter = PuckFilter()
@@ -108,6 +125,27 @@ class GameTracker:
             objects = []
         else:
             objects = self._parse_results(results[0])
+
+        # Fallback puck-only YOLO call when the primary missed the puck.
+        # Runs on a SEPARATE model instance because predict() corrupts the
+        # primary tracker's ByteTrack state. Throttled to every other
+        # missed frame: the PuckFilter coast window already covers 5
+        # frames, so an alternating fallback still recovers dropouts
+        # without paying double inference cost on every frame.
+        has_puck = any(o.class_name == "puck" for o in objects)
+        if not has_puck and self._puck_class_id is not None and (self._frame_count % 2 == 0):
+            try:
+                fb = self.fallback_model.predict(
+                    frame,
+                    classes=[self._puck_class_id],
+                    conf=self.puck_fallback_conf,
+                    verbose=False,
+                )
+                if fb and len(fb) > 0:
+                    fb_objects = self._parse_results(fb[0])
+                    objects.extend(o for o in fb_objects if o.class_name == "puck")
+            except Exception:
+                pass  # Fallback is best-effort; never crash the pipeline
 
         # Single-puck enforcement + on-ice filter + short coast.
         # On camera cut, reset coast state so we don't synthesize a ghost
