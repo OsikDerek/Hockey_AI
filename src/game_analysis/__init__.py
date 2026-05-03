@@ -79,13 +79,14 @@ def run_game_analysis_mode(args, meta):
     )
     report_gen = GameReportGenerator(play_style_name=play_style)
 
+    overlay_config = getattr(args, "overlay_config", None)
     annotator = GameAnnotator(
-        show_boxes=True,
-        show_zone=True,
+        overlay_config=overlay_config,
         show_ids=True,
     )
 
     team_classifier = TeamClassifier(warmup_frames=30)
+    annotator.set_classifier(team_classifier)
 
     # Determine output path
     if args.output is None:
@@ -106,6 +107,7 @@ def run_game_analysis_mode(args, meta):
     analysis = GameAnalysis()
     frame_data = []  # Store frames for pass 2
     team_data = []   # Store team assignments per frame for pass 2
+    shootout_dropout_streak = 0  # hysteresis counter for is_shootout_like
 
     for frame_idx, frame in frame_generator(args.input):
         # Count game objects from previous frame for broadcast filter
@@ -129,16 +131,33 @@ def run_game_analysis_mode(args, meta):
         referees = tracker.filter_by_class(objects, "referee")
         rink_landmarks = tracker.get_rink_landmarks(objects)
 
-        # Shootout-like context: a single (or breakaway pair of) attacker(s) +
-        # opposing goalie, with no real defensive structure on screen. When
-        # this is true we force gameplay = True so the shootout doesn't get
-        # filtered out, and downstream rendering suppresses zone banner +
-        # generic open-space markers (they convey nothing useful in a 1v1).
-        is_shootout_like = (
+        # Shootout-like context: shooter(s) + opposing goalie, no defensive
+        # structure. Hysteresis tolerates single-frame goalie dropouts so a
+        # YOLO miss doesn't flip the flag off mid-approach (which would let
+        # the broadcast filter then stamp NON-GAMEPLAY).
+        was_shootout = (
+            analysis.frame_contexts[-1].is_shootout_like
+            if analysis.frame_contexts else False
+        )
+        current_match = (
             len(players) <= 2
             and len(goalies) >= 1
             and len(referees) <= 1
         )
+        recent_match = (
+            was_shootout
+            and len(players) <= 2
+            and len(referees) <= 1
+        )
+        if current_match:
+            shootout_dropout_streak = 0
+        elif recent_match:
+            shootout_dropout_streak += 1
+            if shootout_dropout_streak > 10:
+                recent_match = False
+        else:
+            shootout_dropout_streak = 0
+        is_shootout_like = current_match or recent_match
         if is_shootout_like:
             is_gameplay = True
 

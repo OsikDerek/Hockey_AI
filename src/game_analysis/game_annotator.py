@@ -52,6 +52,72 @@ AMBIENT_COLORS = {
 }
 
 
+# Per-feature overlay flags. Each key controls one draw path. Quality gates
+# (in GameAnnotator._can_show_*) further suppress features that would
+# render at low confidence.
+FULL_OVERLAYS = {
+    "boxes": True,
+    "team_colors": True,
+    "puck": True,
+    "possession_indicator": True,
+    "zone_banner": True,
+    "ambient_connections": True,
+    "open_spaces": True,
+    "passing_lanes": True,
+    "shooting_lane": True,
+    "decision_banner": True,
+    "decision_freeze": True,
+    "slowdown_indicator": True,
+    "goalie_sight_lines": True,
+    "frame_info_hud": True,
+    "non_gameplay_stamp": True,
+    "camera_cut_indicator": True,
+}
+
+# Phase A default: show only the things that work reliably without team
+# classification. Everything else is silenced until its underlying detection
+# is proven on a clip.
+MINIMAL_OVERLAYS = {
+    "boxes": True,
+    "team_colors": False,
+    "puck": True,
+    "possession_indicator": False,
+    "zone_banner": False,
+    "ambient_connections": False,
+    "open_spaces": False,
+    "passing_lanes": False,
+    "shooting_lane": False,
+    "decision_banner": False,
+    "decision_freeze": False,
+    "slowdown_indicator": False,
+    "goalie_sight_lines": False,
+    "frame_info_hud": True,
+    "non_gameplay_stamp": True,
+    "camera_cut_indicator": True,
+}
+
+OFF_OVERLAYS = {k: False for k in FULL_OVERLAYS}
+
+
+def resolve_overlay_config(
+    preset: str = "minimal",
+    show: Optional[list] = None,
+    hide: Optional[list] = None,
+) -> dict:
+    """Build the overlay flag dict from a preset name + show/hide deltas."""
+    presets = {"minimal": MINIMAL_OVERLAYS, "full": FULL_OVERLAYS, "off": OFF_OVERLAYS}
+    base = dict(presets.get(preset, MINIMAL_OVERLAYS))
+    for k in (show or []):
+        k = k.strip()
+        if k in base:
+            base[k] = True
+    for k in (hide or []):
+        k = k.strip()
+        if k in base:
+            base[k] = False
+    return base
+
+
 class GameAnnotator:
     """Render game analysis overlays on video frames.
 
@@ -62,21 +128,23 @@ class GameAnnotator:
 
     def __init__(
         self,
-        show_boxes: bool = True,
-        show_zone: bool = True,
+        overlay_config: Optional[dict] = None,
         show_ids: bool = True,
         show_rink_landmarks: bool = False,
         box_thickness: int = 2,
         coaching_mode: bool = True,
     ):
-        self.show_boxes = show_boxes
-        self.show_zone = show_zone
+        # Per-feature overlay flags. Defaults to MINIMAL preset.
+        self.overlay = dict(MINIMAL_OVERLAYS)
+        if overlay_config:
+            self.overlay.update(overlay_config)
         self.show_ids = show_ids
         self.show_rink_landmarks = show_rink_landmarks
         self.box_thickness = box_thickness
         self.coaching_mode = coaching_mode
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self._team_assignments = {}
+        self._team_classifier = None  # set via set_classifier(); used by quality gates
         self.lane_calculator = LaneCalculator()
         self.space_detector = SpaceDetector()
         self.goalie_analyzer = GoalieAnalyzer()
@@ -89,6 +157,34 @@ class GameAnnotator:
     def set_team_assignments(self, assignments: dict):
         """Update the current team assignment map."""
         self._team_assignments = assignments
+
+    def set_classifier(self, classifier):
+        """Pass the TeamClassifier in so quality gates can read its state."""
+        self._team_classifier = classifier
+
+    # ── Quality gates — return False to suppress an enabled feature ─────
+    def _classifier_ready(self) -> bool:
+        return self._team_classifier is not None and getattr(self._team_classifier, "is_ready", False)
+
+    def _vote_count(self, track_id: int) -> int:
+        if self._team_classifier is None:
+            return 0
+        return self._team_classifier.get_vote_count(track_id)
+
+    def _can_show_team_colors_for(self, track_id: int) -> bool:
+        return self._classifier_ready() and self._vote_count(track_id) >= 5
+
+    def _can_show_ambient(self, teammates: list) -> bool:
+        if not self._classifier_ready() or not teammates:
+            return False
+        return all(self._vote_count(t.track_id) >= 3 for t in teammates)
+
+    def _can_show_goalie_sight(self, context, goalie) -> bool:
+        if goalie is None:
+            return False
+        if context.is_shootout_like:
+            return True
+        return self._team_assignments.get(goalie.track_id) is not None
 
     def render(
         self,
@@ -108,12 +204,14 @@ class GameAnnotator:
             open_spaces: List of open space dicts from SpaceDetector.
         """
         annotated = frame.copy()
+        ov = self.overlay
 
         if not context.is_gameplay:
-            self._draw_non_gameplay(annotated)
+            if ov.get("non_gameplay_stamp"):
+                self._draw_non_gameplay(annotated)
             return annotated
 
-        if context.is_camera_cut:
+        if context.is_camera_cut and ov.get("camera_cut_indicator"):
             self._draw_camera_cut(annotated)
 
         # Update goalie cache (so freeze frames can fall back to it when
@@ -124,33 +222,38 @@ class GameAnnotator:
         else:
             self._last_goalie_age += 1
 
-        # Open space overlay (draw first so it's behind everything).
-        # Skipped during shootout-like 1v1s — the gap structure is meaningless.
-        if open_spaces and not context.is_shootout_like:
+        if open_spaces and not context.is_shootout_like and ov.get("open_spaces"):
             self._draw_open_spaces(annotated, open_spaces)
 
-        if self.show_boxes:
+        if ov.get("boxes"):
             self._draw_objects(annotated, context)
 
-        # Zone banner suppressed during shootout-like frames
-        if self.show_zone and context.zone and not context.is_shootout_like:
+        if ov.get("zone_banner") and context.zone and not context.is_shootout_like:
             self._draw_zone_banner(annotated, context.zone)
 
-        if context.possession_player_id is not None:
+        if (
+            ov.get("possession_indicator")
+            and context.possession_player_id is not None
+            and self._classifier_ready()
+        ):
             self._draw_possession(annotated, context)
 
-        # Always-on green/red carrier-to-teammate lines
-        if ambient_connections:
-            self._draw_ambient_connections(annotated, ambient_connections)
+        if ov.get("ambient_connections") and ambient_connections:
+            # The teammates passed in are reflected in connection target_ids;
+            # we re-derive vote-count gate from those.
+            connected_ids = {c.get("target_id") for c in ambient_connections}
+            teammate_objs = [p for p in context.players if p.track_id in connected_ids]
+            if self._can_show_ambient(teammate_objs):
+                self._draw_ambient_connections(annotated, ambient_connections)
 
-        # Always-on goalie sight lines on shootout-like frames (no event needed)
-        if context.is_shootout_like:
+        if ov.get("goalie_sight_lines") and context.is_shootout_like:
             self._draw_shootout_sight_lines(annotated, context)
 
-        if events:
+        if ov.get("decision_banner") and events:
             self._draw_events(annotated, events)
 
-        self._draw_frame_info(annotated, context)
+        if ov.get("frame_info_hud"):
+            self._draw_frame_info(annotated, context)
         return annotated
 
     @staticmethod
@@ -176,7 +279,7 @@ class GameAnnotator:
             return
 
         goalie = context.goalies[0] if context.goalies else self._last_goalie
-        if goalie is None:
+        if goalie is None or not self._can_show_goalie_sight(context, goalie):
             return
 
         goal_lm = None
@@ -222,31 +325,40 @@ class GameAnnotator:
 
         # Draw lanes on an overlay for transparency
         overlay = annotated.copy()
+        ov = self.overlay
+        drew_lane = False
 
-        # Passing lanes
-        if lane_data.get("passing"):
+        if (
+            ov.get("passing_lanes")
+            and lane_data.get("passing")
+            and self._classifier_ready()
+        ):
             self._draw_passing_lanes(overlay, lane_data["passing"], alpha, phase)
+            drew_lane = True
 
-        # Shooting lane
-        if lane_data.get("shooting"):
+        if (
+            ov.get("shooting_lane")
+            and lane_data.get("shooting")
+            and self._classifier_ready()
+        ):
             self._draw_shooting_lane(overlay, lane_data["shooting"], alpha, phase)
+            drew_lane = True
 
-        # Blend overlay — use a minimum alpha so lanes are always visible
-        lane_alpha = max(alpha, 0.55)
-        cv2.addWeighted(overlay, lane_alpha, annotated, 1.0 - lane_alpha, 0, annotated)
+        if drew_lane:
+            lane_alpha = max(alpha, 0.55)
+            cv2.addWeighted(overlay, lane_alpha, annotated, 1.0 - lane_alpha, 0, annotated)
 
-        # Goalie analysis during shooting-related events.
-        # Falls back to the most recently seen goalie (cached in self._last_goalie
-        # by render()) when YOLO drops the goalie on the freeze frame itself —
-        # otherwise the sight lines would never appear despite the event firing.
         event_type = event.event_type if event else ""
         is_shot_event = event_type in ("shot_vs_pass", "odd_man_rush", "missed_opportunity")
-        if is_shot_event and phase in ("slowdown", "freeze"):
+        if ov.get("goalie_sight_lines") and is_shot_event and phase in ("slowdown", "freeze"):
             goalie_for_analysis = (
                 context.goalies[0] if context.goalies
                 else (self._last_goalie if self._last_goalie_age <= 30 else None)
             )
-            if goalie_for_analysis is not None:
+            if (
+                goalie_for_analysis is not None
+                and self._can_show_goalie_sight(context, goalie_for_analysis)
+            ):
                 eid = event.player_id if event else context.possession_player_id
                 carrier_obj = self._find_player_by_id(context.players, eid)
                 if carrier_obj:
@@ -259,12 +371,10 @@ class GameAnnotator:
                     )
                     draw_goalie_analysis(annotated, goalie_data)
 
-        # Freeze frame special treatment
-        if phase == "freeze" and event:
+        if ov.get("decision_freeze") and phase == "freeze" and event:
             self._draw_decision_freeze(annotated, event, lane_data)
 
-        # Slowdown indicator
-        if phase == "slowdown":
+        if ov.get("slowdown_indicator") and phase == "slowdown":
             self._draw_slowdown_indicator(annotated)
 
         return annotated
@@ -284,7 +394,12 @@ class GameAnnotator:
                     continue
 
             team = self._team_assignments.get(obj.track_id)
-            if obj.class_name == "player" and team is not None:
+            if (
+                obj.class_name == "player"
+                and team is not None
+                and self.overlay.get("team_colors")
+                and self._can_show_team_colors_for(obj.track_id)
+            ):
                 team_color = TEAM_COLORS.get(team, (200, 200, 200))
             else:
                 team_color = None
@@ -297,6 +412,8 @@ class GameAnnotator:
             # PuckFilter when YOLO drops the puck for a frame or two; render
             # them with a dashed circle and dimmer color so the user can see
             # at a glance which frames are real detections vs coasted.
+            if obj.class_name == "puck" and not self.overlay.get("puck", True):
+                continue
             if obj.class_name == "puck":
                 is_ghost = obj.confidence <= 0.001
                 pcx = (x1 + x2) // 2

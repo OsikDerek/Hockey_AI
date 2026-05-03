@@ -122,6 +122,17 @@ class TeamClassifier:
     def get_team(self, track_id: int) -> Optional[str]:
         return self._team_map.get(track_id)
 
+    def get_vote_count(self, track_id: int) -> int:
+        """Total votes cast for this track_id across both teams.
+
+        Used by quality gates in the renderer to suppress team-dependent
+        overlays for players who haven't been seen enough times yet.
+        """
+        v = self._vote_counts.get(track_id)
+        if v is None:
+            return 0
+        return int(v[0]) + int(v[1])
+
     @property
     def is_ready(self) -> bool:
         return self._is_warmed_up

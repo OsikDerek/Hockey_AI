@@ -67,6 +67,25 @@ def parse_args():
              "(default: balanced). Options: possession, physical, speed, defensive",
     )
     parser.add_argument(
+        "--overlays",
+        default="minimal",
+        choices=["minimal", "full", "off"],
+        help="Game-analysis overlay preset (default: minimal). 'minimal' shows "
+             "only reliably-correct features (boxes, puck, frame info). 'full' "
+             "shows everything; 'off' suppresses all overlays.",
+    )
+    parser.add_argument(
+        "--show",
+        default="",
+        help="Comma-separated overlay features to enable on top of preset "
+             "(e.g. ambient_connections,goalie_sight_lines,decision_freeze)",
+    )
+    parser.add_argument(
+        "--hide",
+        default="",
+        help="Comma-separated overlay features to suppress relative to preset",
+    )
+    parser.add_argument(
         "--technique", "-t",
         default=None,
         help="Technique to analyze (e.g., crossover, forward_stride). "
@@ -670,6 +689,12 @@ def main():
     # Route to appropriate pipeline
     if args.game_analysis:
         from src.game_analysis import run_game_analysis_mode
+        from src.game_analysis.game_annotator import resolve_overlay_config
+        show_list = [s for s in (args.show or "").split(",") if s.strip()]
+        hide_list = [h for h in (args.hide or "").split(",") if h.strip()]
+        args.overlay_config = resolve_overlay_config(
+            preset=args.overlays, show=show_list, hide=hide_list,
+        )
         run_game_analysis_mode(args, meta)
     elif args.technique:
         run_technique_mode(args, meta)
