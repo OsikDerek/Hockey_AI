@@ -90,10 +90,20 @@ async function loadData(payloadOrUrl, fromFile = false) {
     scrubber.value = 0;
     populatePOVPicker();
     clearAvatars();
+
+    // Display file name (from File obj or URL) + frames + calibration quality
+    let fileName;
+    if (fromFile) {
+      fileName = payloadOrUrl.name;
+    } else {
+      try { fileName = decodeURIComponent(payloadOrUrl.split("/").pop()); }
+      catch { fileName = payloadOrUrl; }
+    }
     const q = data.calibrationQuality;
-    dataStatus.textContent =
-      `${data.totalFrames} frames @ ${data.fps}fps` +
-      (q ? ` · ${q.in_rink_pct}% in rink` : "");
+    const qStr = q
+      ? ` · ${q.in_rink_pct}% in rink`
+      : " · (no calibration_quality field — re-run pipeline for the metric)";
+    dataStatus.textContent = `${fileName} · ${data.totalFrames} frames @ ${data.fps}fps${qStr}`;
     updateFrameDisplay();
   } catch (e) {
     dataStatus.textContent = `Load failed: ${e.message}`;
@@ -122,21 +132,18 @@ function updateFrameDisplay() {
 }
 
 function applyFrame(fr) {
-  if (!fr) {
-    puck.visible = false;
-    for (const { mesh } of avatars.values()) mesh.visible = false;
-    return;
-  }
-  if (!fr.calibrated) {
-    puck.visible = false;
-    for (const { mesh } of avatars.values()) mesh.visible = false;
-    return;
-  }
+  if (!fr) return;
 
-  // dt for skating animation
+  // When calibration is missing this frame, hold the previous positions
+  // for everyone instead of hiding the scene. Calibration drops in/out
+  // frequently in broadcast follow-cam, so erasing the world every dropout
+  // makes the playback unwatchable.
+  if (!fr.calibrated) return;
+
   const fps = data.fps;
   const dt = 1.0 / fps;
   const seenIds = new Set();
+  const currentFrameIdx = Math.floor(playback.frameIdx);
 
   for (const p of fr.players || []) {
     const team = p.team || data.dominantTeamFor(p.track_id);
@@ -146,7 +153,7 @@ function applyFrame(fr) {
     updateAvatar(entry.mesh, prev, pos, dt);
     entry.mesh.visible = true;
     entry.lastPos = pos;
-    entry.lastFrameIdx = fr.frame_idx;
+    entry.lastFrameIdx = currentFrameIdx;
     seenIds.add(p.track_id);
   }
   for (const g of fr.goalies || []) {
@@ -157,19 +164,24 @@ function applyFrame(fr) {
     updateAvatar(entry.mesh, prev, pos, dt);
     entry.mesh.visible = true;
     entry.lastPos = pos;
-    entry.lastFrameIdx = fr.frame_idx;
+    entry.lastFrameIdx = currentFrameIdx;
     seenIds.add(g.track_id);
   }
-  // Hide avatars not seen this frame
+  // Avatars not seen this calibrated frame: hide only if they've been
+  // missing for a while (>STALE_FRAMES). Calibration drops in/out across
+  // 70-90% of frames in broadcast follow-cam, so we hold avatars for
+  // several seconds of real time before hiding them.
+  const STALE_FRAMES = Math.max(60, Math.round(fps * 3.0));
   for (const [tid, entry] of avatars) {
-    if (!seenIds.has(tid)) entry.mesh.visible = false;
+    if (seenIds.has(tid)) continue;
+    if (entry.lastFrameIdx >= 0 && currentFrameIdx - entry.lastFrameIdx > STALE_FRAMES) {
+      entry.mesh.visible = false;
+    }
   }
 
   if (fr.puck) {
     puck.visible = true;
     puck.position.set(fr.puck.ice_x, 0.15, fr.puck.ice_y);
-  } else {
-    puck.visible = false;
   }
 }
 

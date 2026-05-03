@@ -18,6 +18,25 @@ export function createAvatar(team, isGoalie = false) {
   const heightFt = isGoalie ? 5.0 : 5.5;
   const radius = isGoalie ? 1.4 : 0.9;
 
+  // Foot disc — a flat team-colored disc on the ice at the avatar's feet.
+  // Crucial for top-down readability; the body capsule is invisible from
+  // straight overhead.
+  const discRadius = isGoalie ? 2.4 : 1.6;
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(discRadius, 24),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 }),
+  );
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = 0.04;
+  root.add(disc);
+  const discRing = new THREE.Mesh(
+    new THREE.RingGeometry(discRadius * 0.95, discRadius, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+  );
+  discRing.rotation.x = -Math.PI / 2;
+  discRing.position.y = 0.05;
+  root.add(discRing);
+
   // Body: capsule from waist to chest
   const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
   const body = new THREE.Mesh(
