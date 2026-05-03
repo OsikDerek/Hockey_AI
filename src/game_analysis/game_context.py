@@ -17,6 +17,7 @@ class TrackedObject:
     bbox: tuple               # (x1, y1, x2, y2)
     center: tuple             # (cx, cy)
     confidence: float
+    ice_xy: Optional[tuple] = None    # (x_ft, y_ft) in NHL rink coords; None when uncalibrated
 
     @property
     def width(self) -> float:
@@ -53,6 +54,7 @@ class FrameContext:
     is_gameplay: bool = True
     is_camera_cut: bool = False
     is_shootout_like: bool = False  # 1-on-1 vs goalie context (shooter + goalie, no defenders)
+    ice_calibrated: bool = False  # True when RinkCalibrator has produced a valid pixel<->ice transform
     team_assignments: dict = field(default_factory=dict)  # track_id -> "team_a" | "team_b"
 
 

@@ -12,6 +12,7 @@ from .game_context import FrameContext, GameEvent
 from .lane_calculator import LaneCalculator
 from .space_detector import SpaceDetector
 from .goalie_analyzer import GoalieAnalyzer, draw_goalie_analysis
+from .rink_calibrator import RINK_LENGTH_FT, RINK_WIDTH_FT, BLUE_LINE_LEFT_X_FT, BLUE_LINE_RIGHT_X_FT, CENTER_X_FT, CENTER_Y_FT, LEFT_GOAL_X_FT, RIGHT_GOAL_X_FT
 
 
 # Colors by class (BGR)
@@ -26,8 +27,8 @@ CLASS_COLORS = {
 }
 
 TEAM_COLORS = {
-    "team_a": (255, 120, 50),     # Blue
-    "team_b": (60, 60, 255),      # Red
+    "team_a": (40, 220, 40),      # Bright green
+    "team_b": (40, 40, 220),      # Bright red
 }
 
 ZONE_COLORS = {
@@ -72,6 +73,7 @@ FULL_OVERLAYS = {
     "frame_info_hud": True,
     "non_gameplay_stamp": True,
     "camera_cut_indicator": True,
+    "minimap": True,
 }
 
 # Phase A default: show only the things that work reliably without team
@@ -79,7 +81,7 @@ FULL_OVERLAYS = {
 # is proven on a clip.
 MINIMAL_OVERLAYS = {
     "boxes": True,
-    "team_colors": False,
+    "team_colors": True,
     "puck": True,
     "possession_indicator": False,
     "zone_banner": False,
@@ -94,6 +96,7 @@ MINIMAL_OVERLAYS = {
     "frame_info_hud": True,
     "non_gameplay_stamp": True,
     "camera_cut_indicator": True,
+    "minimap": True,
 }
 
 OFF_OVERLAYS = {k: False for k in FULL_OVERLAYS}
@@ -145,6 +148,7 @@ class GameAnnotator:
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self._team_assignments = {}
         self._team_classifier = None  # set via set_classifier(); used by quality gates
+        self._calibrator = None  # set via set_calibrator(); used by minimap
         self.lane_calculator = LaneCalculator()
         self.space_detector = SpaceDetector()
         self.goalie_analyzer = GoalieAnalyzer()
@@ -162,6 +166,10 @@ class GameAnnotator:
         """Pass the TeamClassifier in so quality gates can read its state."""
         self._team_classifier = classifier
 
+    def set_calibrator(self, calibrator):
+        """Pass the RinkCalibrator in so the minimap can place objects in ice coords."""
+        self._calibrator = calibrator
+
     # ── Quality gates — return False to suppress an enabled feature ─────
     def _classifier_ready(self) -> bool:
         return self._team_classifier is not None and getattr(self._team_classifier, "is_ready", False)
@@ -178,6 +186,11 @@ class GameAnnotator:
         if not self._classifier_ready() or not teammates:
             return False
         return all(self._vote_count(t.track_id) >= 3 for t in teammates)
+
+    def _should_show_ids(self) -> bool:
+        """Track-id labels are diagnostic, only render in the full preset
+        (we use overlay.zone_banner as a proxy for "diagnostic preset")."""
+        return self.show_ids and self.overlay.get("zone_banner", False)
 
     def _can_show_goalie_sight(self, context, goalie) -> bool:
         if goalie is None:
@@ -254,6 +267,9 @@ class GameAnnotator:
 
         if ov.get("frame_info_hud"):
             self._draw_frame_info(annotated, context)
+
+        if ov.get("minimap") and self._calibrator is not None and self._calibrator.is_calibrated:
+            self._draw_minimap(annotated, context)
         return annotated
 
     @staticmethod
@@ -438,36 +454,122 @@ class GameAnnotator:
                     cv2.putText(frame, label, (x1 + 3, ly), self.font, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
                 continue
 
-            # -- Players: white box + colored team stripe --
+            # -- Players: bounding-box outline colored by team (gray when
+            # the classifier hasn't yet committed to a team for this player).
+            # The box is the only team indicator; no separate stripe, no dot,
+            # no "A#146" label — those were noise.
             if obj.class_name == "player":
-                box_color = (220, 220, 220)  # Neutral white-gray box
+                box_color = team_color if team_color else (220, 220, 220)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, self.box_thickness)
-                # Team stripe on left edge
-                if team_color:
-                    stripe_w = 4
-                    cv2.rectangle(frame, (x1, y1), (x1 + stripe_w, y2), team_color, -1)
-                    # Small team dot above box
-                    dot_cx = x1 + (x2 - x1) // 2
-                    dot_cy = y1 - 8
-                    cv2.circle(frame, (dot_cx, dot_cy), 5, team_color, -1)
-                    cv2.circle(frame, (dot_cx, dot_cy), 5, (255, 255, 255), 1)
             else:
-                # Other classes: standard colored box
+                # Non-player classes: keep their semantic colors as before
                 cv2.rectangle(frame, (x1, y1), (x2, y2), base_color, self.box_thickness)
 
-            # -- Label --
-            if self.show_ids and obj.track_id >= 0:
+            # Track-id labels are diagnostic only — render them only when the
+            # user explicitly enabled show_ids AND is running a non-minimal
+            # preset (the diagnostic / full preset).
+            if self._should_show_ids() and obj.track_id >= 0:
                 label = f"#{obj.track_id}"
-                if team:
-                    label = f"{team[-1].upper()}{label}"  # "A#5" or "B#12"
-            else:
-                label = obj.class_name
+                label_color = team_color if team_color else base_color
+                sz = cv2.getTextSize(label, self.font, 0.4, 1)[0]
+                ly = max(y1 - 4, sz[1] + 2)
+                cv2.rectangle(frame, (x1, ly - sz[1] - 2), (x1 + sz[0] + 4, ly + 2), label_color, -1)
+                cv2.putText(frame, label, (x1 + 2, ly), self.font, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
 
-            label_color = team_color if team_color else base_color
-            sz = cv2.getTextSize(label, self.font, 0.4, 1)[0]
-            ly = max(y1 - 4, sz[1] + 2)
-            cv2.rectangle(frame, (x1, ly - sz[1] - 2), (x1 + sz[0] + 4, ly + 2), label_color, -1)
-            cv2.putText(frame, label, (x1 + 2, ly), self.font, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+    def _draw_minimap(self, frame, context):
+        """Top-down rink minimap with player + puck dots in ice coords.
+
+        Sized ~30% of frame width, anchored bottom-right with a small inset.
+        Uses the RinkCalibrator to translate detection centers to ice coords;
+        clips off-rink dots so noise outside [0,200]x[0,85] doesn't render.
+        """
+        h, w = frame.shape[:2]
+        # Minimap size: 30% of frame width, preserving 200:85 aspect ratio
+        mm_w = int(w * 0.30)
+        mm_h = int(mm_w * RINK_WIDTH_FT / RINK_LENGTH_FT)
+        margin = 12
+        x0 = w - mm_w - margin
+        y0 = h - mm_h - margin
+
+        # Helper: ice (x_ft, y_ft) -> minimap pixel
+        def ice_to_mm(ix: float, iy: float) -> tuple:
+            mx = int(x0 + (ix / RINK_LENGTH_FT) * mm_w)
+            my = int(y0 + (iy / RINK_WIDTH_FT) * mm_h)
+            return mx, my
+
+        # Background panel: semi-transparent white-ice
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0 - 3, y0 - 3), (x0 + mm_w + 3, y0 + mm_h + 3), (40, 40, 40), -1)
+        cv2.rectangle(overlay, (x0, y0), (x0 + mm_w, y0 + mm_h), (245, 245, 245), -1)
+        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+        # Boards outline
+        cv2.rectangle(frame, (x0, y0), (x0 + mm_w, y0 + mm_h), (60, 60, 60), 2)
+
+        # Blue lines
+        for blue_x in (BLUE_LINE_LEFT_X_FT, BLUE_LINE_RIGHT_X_FT):
+            bx, _ = ice_to_mm(blue_x, 0)
+            cv2.line(frame, (bx, y0), (bx, y0 + mm_h), (220, 90, 30), 2)
+
+        # Center red line
+        cx, _ = ice_to_mm(CENTER_X_FT, 0)
+        cv2.line(frame, (cx, y0), (cx, y0 + mm_h), (40, 40, 220), 2)
+
+        # Center ice dot + circle
+        center_dot = ice_to_mm(CENTER_X_FT, CENTER_Y_FT)
+        cv2.circle(frame, center_dot, max(3, mm_w // 80), (40, 40, 220), -1)
+        cv2.circle(frame, center_dot, max(8, mm_w // 30), (40, 40, 220), 1)
+
+        # End-zone faceoff dots: 4 corners (NHL geometry: 20 ft from goal line, 22 ft from boards)
+        for dot_x_ft in (LEFT_GOAL_X_FT + 20, RIGHT_GOAL_X_FT - 20):
+            for dot_y_ft in (22.0, RINK_WIDTH_FT - 22.0):
+                pt = ice_to_mm(dot_x_ft, dot_y_ft)
+                cv2.circle(frame, pt, max(2, mm_w // 100), (220, 90, 30), -1)
+                cv2.circle(frame, pt, max(7, mm_w // 38), (220, 90, 30), 1)
+
+        # Neutral-zone faceoff dots: 4 dots flanking the blue lines
+        for dot_x_ft in (BLUE_LINE_LEFT_X_FT + 5, BLUE_LINE_RIGHT_X_FT - 5):
+            for dot_y_ft in (22.0, RINK_WIDTH_FT - 22.0):
+                pt = ice_to_mm(dot_x_ft, dot_y_ft)
+                cv2.circle(frame, pt, max(2, mm_w // 100), (220, 90, 30), -1)
+
+        # Goal creases (filled blue arcs are too fiddly at this scale; use small rect)
+        for goal_x_ft in (LEFT_GOAL_X_FT, RIGHT_GOAL_X_FT):
+            gx, gy_top = ice_to_mm(goal_x_ft, CENTER_Y_FT - 4)
+            _, gy_bot = ice_to_mm(0, CENTER_Y_FT + 4)
+            cv2.line(frame, (gx, gy_top), (gx, gy_bot), (40, 40, 220), 2)
+
+        # Plot players (team-colored), goalies (team-colored, larger), and puck
+        def in_rink(ix: float, iy: float) -> bool:
+            return -2 <= ix <= RINK_LENGTH_FT + 2 and -2 <= iy <= RINK_WIDTH_FT + 2
+
+        for p in context.players:
+            if p.ice_xy is None:
+                continue
+            ix, iy = p.ice_xy
+            if not in_rink(ix, iy):
+                continue
+            team = self._team_assignments.get(p.track_id)
+            color = TEAM_COLORS.get(team, (160, 160, 160)) if team else (160, 160, 160)
+            cv2.circle(frame, ice_to_mm(ix, iy), max(3, mm_w // 70), color, -1)
+            cv2.circle(frame, ice_to_mm(ix, iy), max(3, mm_w // 70), (255, 255, 255), 1)
+
+        for g in context.goalies:
+            if g.ice_xy is None:
+                continue
+            ix, iy = g.ice_xy
+            if not in_rink(ix, iy):
+                continue
+            team = self._team_assignments.get(g.track_id)
+            color = TEAM_COLORS.get(team, (200, 200, 200)) if team else (200, 200, 200)
+            cv2.circle(frame, ice_to_mm(ix, iy), max(5, mm_w // 50), color, -1)
+            cv2.circle(frame, ice_to_mm(ix, iy), max(5, mm_w // 50), (0, 0, 0), 2)
+
+        if context.puck is not None and context.puck.ice_xy is not None:
+            ix, iy = context.puck.ice_xy
+            if in_rink(ix, iy):
+                cv2.circle(frame, ice_to_mm(ix, iy), max(3, mm_w // 90), (0, 220, 220), -1)
+                cv2.circle(frame, ice_to_mm(ix, iy), max(3, mm_w // 90), (0, 0, 0), 1)
 
     def _draw_zone_banner(self, frame, zone):
         h, w = frame.shape[:2]

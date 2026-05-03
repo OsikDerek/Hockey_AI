@@ -169,6 +169,11 @@ class GameTracker:
             # Get class info
             class_id = int(boxes.cls[i].cpu().item())
             class_name = self.class_names.get(class_id, f"unknown_{class_id}")
+            # The HockeyAI weights ship with the class label "centriod"
+            # (typo). Normalize at parse time so downstream code can use
+            # the correct spelling.
+            if class_name == "centriod":
+                class_name = "centroid"
             conf = float(boxes.conf[i].cpu().item())
 
             # Get bounding box

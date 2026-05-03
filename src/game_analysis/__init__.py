@@ -25,6 +25,7 @@ from .space_detector import SpaceDetector
 from .game_annotator import GameAnnotator
 from .team_classifier import TeamClassifier
 from .game_report import GameReportGenerator
+from .rink_calibrator import RinkCalibrator
 from .decisions import DECISION_REGISTRY
 
 
@@ -88,6 +89,9 @@ def run_game_analysis_mode(args, meta):
     team_classifier = TeamClassifier(warmup_frames=30)
     annotator.set_classifier(team_classifier)
 
+    rink_calibrator = RinkCalibrator()
+    annotator.set_calibrator(rink_calibrator)
+
     # Determine output path
     if args.output is None:
         base = os.path.splitext(os.path.basename(args.input))[0]
@@ -130,6 +134,13 @@ def run_game_analysis_mode(args, meta):
         goalies = tracker.get_goalies(objects)
         referees = tracker.filter_by_class(objects, "referee")
         rink_landmarks = tracker.get_rink_landmarks(objects)
+
+        # Update pixel<->ice transform from this frame's landmarks, then
+        # tag every detection with its ice (x_ft, y_ft) coords.
+        rink_calibrator.update(rink_landmarks, meta["width"], meta["height"])
+        if rink_calibrator.is_calibrated:
+            for obj in objects:
+                obj.ice_xy = rink_calibrator.pixel_to_ice(obj.center)
 
         # Shootout-like context: shooter(s) + opposing goalie, no defensive
         # structure. Hysteresis tolerates single-frame goalie dropouts so a
@@ -194,6 +205,7 @@ def run_game_analysis_mode(args, meta):
             is_gameplay=is_gameplay,
             is_camera_cut=is_camera_cut,
             is_shootout_like=is_shootout_like,
+            ice_calibrated=rink_calibrator.is_calibrated,
             team_assignments=dict(team_assignments),
         )
 
@@ -403,13 +415,15 @@ def run_game_analysis_mode(args, meta):
             if aw != out_w or ah != out_h:
                 annotated = cv2.resize(annotated, (out_w, out_h))
 
-            # Timing control
+            # Timing control: only pause the video at decision points when
+            # the corresponding overlay is enabled, otherwise the user sees
+            # an unexplained pause.
             if phase_info is not None:
                 phase = phase_info["phase"]
-                if phase == "freeze":
+                if phase == "freeze" and annotator.overlay.get("decision_freeze"):
                     repeat = int(fps * freeze_duration)
                     _vis_counts["freeze"] += 1
-                elif phase == "slowdown":
+                elif phase == "slowdown" and annotator.overlay.get("slowdown_indicator"):
                     repeat = 2
                 else:
                     repeat = 1
@@ -459,7 +473,65 @@ def run_game_analysis_mode(args, meta):
     print()
     report_gen.save(analysis, args, meta)
 
+    # Per-frame ice-coordinate positions (Phase B0 data layer). Same shape
+    # as NHL EDGE so Phase C can consume it for 3D scene reconstruction
+    # without re-running CV.
+    _write_positions_json(args.output, analysis, meta, team_data)
+
     return analysis
+
+
+def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
+    """Dump per-frame ice positions for every tracked object."""
+    import json
+    from .rink_calibrator import RINK_LENGTH_FT, RINK_WIDTH_FT
+
+    base = os.path.splitext(output_path)[0]
+    json_path = f"{base}_positions.json"
+
+    frames_out = []
+    for i, ctx in enumerate(analysis.frame_contexts):
+        teams = team_data[i] if i < len(team_data) else {}
+
+        def _dump(obj):
+            if obj is None or obj.ice_xy is None:
+                return None
+            ix, iy = obj.ice_xy
+            return {
+                "track_id": int(obj.track_id),
+                "team": teams.get(obj.track_id),
+                "ice_x": round(float(ix), 2),
+                "ice_y": round(float(iy), 2),
+                "confidence": round(float(obj.confidence), 3),
+            }
+
+        puck_record = None
+        if ctx.puck is not None and ctx.puck.ice_xy is not None:
+            ix, iy = ctx.puck.ice_xy
+            puck_record = {
+                "ice_x": round(float(ix), 2),
+                "ice_y": round(float(iy), 2),
+                "confidence": round(float(ctx.puck.confidence), 3),
+            }
+
+        frames_out.append({
+            "frame_idx": ctx.frame_idx,
+            "timestamp_sec": round(ctx.timestamp_sec, 3),
+            "calibrated": ctx.ice_calibrated,
+            "is_gameplay": ctx.is_gameplay,
+            "puck": puck_record,
+            "players": [r for r in (_dump(p) for p in ctx.players) if r is not None],
+            "goalies": [r for r in (_dump(g) for g in ctx.goalies) if r is not None],
+        })
+
+    payload = {
+        "rink": {"length_ft": RINK_LENGTH_FT, "width_ft": RINK_WIDTH_FT},
+        "fps": meta.get("fps", 30.0),
+        "frames": frames_out,
+    }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    print(f"  Positions JSON: {json_path}")
 
 
 def _split_teams(players, carrier_id, team_assignments):
