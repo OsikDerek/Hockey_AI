@@ -1,0 +1,3 @@
+- [User role and hockey expertise](user_role.md) — Derek Osik is a pro hockey player + skating coach; skip fundamentals
+- [Hockey_AI project overview](project_hockey_ai.md) — two-mode CV project (technique + game analysis), GTX 1070 GPU, canonical test clips
+- [Subagent editing preference](feedback_session_style.md) — if subagent edits get blocked, implement directly from main session
