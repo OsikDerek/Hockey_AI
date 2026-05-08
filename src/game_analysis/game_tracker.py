@@ -45,6 +45,8 @@ class GameTracker:
         conf: float = 0.25,
         iou: float = 0.5,
         tracker: str = "bytetrack.yaml",
+        landmark_model_path: str = "models/landmarks_yolov8n.pt",
+        landmark_conf: float = 0.20,
     ):
         from ultralytics import YOLO
 
@@ -68,6 +70,23 @@ class GameTracker:
         # YOLO call when the primary call returns no puck. The PuckFilter
         # still rejects bad candidates via on-ice + proximity scoring.
         self.puck_fallback_conf = 0.10
+
+        # Optional rink-landmarks specialist model. When present, runs in
+        # parallel with the main model and its centroid / faceoff / goal
+        # detections take precedence (the main model under-detects these
+        # because its representation budget is dominated by the "player"
+        # class). Falls back gracefully when the file isn't present.
+        self.landmark_model = None
+        self.landmark_conf = landmark_conf
+        landmark_file = Path(landmark_model_path)
+        if landmark_file.is_file():
+            try:
+                self.landmark_model = YOLO(str(landmark_file))
+                print(f"  GameTracker: landmark specialist loaded from {landmark_file} "
+                      f"(classes: {self.landmark_model.names})")
+            except Exception as e:
+                print(f"  GameTracker: landmark specialist failed to load: {e}")
+                self.landmark_model = None
 
         # Verify class names match expected
         self.class_names = {}
@@ -147,6 +166,27 @@ class GameTracker:
             except Exception:
                 pass  # Fallback is best-effort; never crash the pipeline
 
+        # Landmark specialist: when loaded, augment the main model's
+        # rink-landmark detections (centroid, faceoff, goal) with this
+        # 3-class focused model. We REPLACE the main model's landmark
+        # detections to avoid double-counting + give the specialist
+        # priority. Player / puck / goalie / referee classes are
+        # untouched (still come from the main HockeyAI model).
+        if self.landmark_model is not None:
+            try:
+                lm_results = self.landmark_model.predict(
+                    frame, conf=self.landmark_conf, verbose=False,
+                )
+                if lm_results and len(lm_results) > 0:
+                    landmark_objs = self._parse_landmark_results(lm_results[0])
+                    landmark_classes = {"centroid", "faceoff", "goal"}
+                    objects = [o for o in objects if o.class_name not in landmark_classes]
+                    objects.extend(landmark_objs)
+            except Exception:
+                # Best-effort: never break the main pipeline if the
+                # specialist crashes mid-frame.
+                pass
+
         # Single-puck enforcement + on-ice filter + short coast.
         # On camera cut, reset coast state so we don't synthesize a ghost
         # at a position from a totally different angle.
@@ -156,6 +196,38 @@ class GameTracker:
 
         objects = self.puck_filter.filter(objects, frame)
         return objects
+
+    def _parse_landmark_results(self, result) -> list:
+        """Parse landmark-specialist detections.
+
+        The specialist's class indices are 0=centroid, 1=faceoff, 2=goal
+        (preserved from the SHL training data). No track_id since the
+        specialist runs as a per-frame predict (no ByteTrack state).
+        """
+        out = []
+        if result is None or result.boxes is None:
+            return out
+        boxes = result.boxes
+        names = self.landmark_model.names if self.landmark_model else {}
+        for i in range(len(boxes)):
+            xyxy = boxes.xyxy[i].cpu().numpy()
+            cls_id = int(boxes.cls[i].item())
+            conf = float(boxes.conf[i].item())
+            class_name = names.get(cls_id, f"unknown_{cls_id}")
+            # Normalize the typo from the original model
+            if class_name == "centriod":
+                class_name = "centroid"
+            x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+            obj = TrackedObject(
+                track_id=-1,  # specialist has no tracker; landmarks don't need stable IDs
+                class_name=class_name,
+                class_id=cls_id,
+                bbox=(x1, y1, x2, y2),
+                center=((x1 + x2) / 2, (y1 + y2) / 2),
+                confidence=conf,
+            )
+            out.append(obj)
+        return out
 
     def _parse_results(self, result) -> list:
         """Convert ultralytics result to list of TrackedObject."""
