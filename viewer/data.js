@@ -73,6 +73,34 @@ export class PositionsData {
       (e) => e.frame_start <= frameIdx && frameIdx <= e.frame_end
     );
   }
+
+  /** Lazy-cached array of contiguous calibrated [start, end] index ranges.
+   *  Used by the viewer to skip uncalibrated playback gaps + render coverage. */
+  calibratedRanges() {
+    if (this._calibratedRanges) return this._calibratedRanges;
+    const ranges = [];
+    let runStart = -1;
+    for (let i = 0; i < this.frames.length; i++) {
+      const cal = !!this.frames[i].calibrated;
+      if (cal && runStart < 0) runStart = i;
+      else if (!cal && runStart >= 0) {
+        ranges.push([runStart, i - 1]);
+        runStart = -1;
+      }
+    }
+    if (runStart >= 0) ranges.push([runStart, this.frames.length - 1]);
+    this._calibratedRanges = ranges;
+    return ranges;
+  }
+
+  /** Next frame at or after `idx` that has calibration. Returns idx if it
+   *  is already calibrated. Returns -1 if no calibrated frames remain. */
+  nextCalibratedFrom(idx) {
+    for (const [s, e] of this.calibratedRanges()) {
+      if (idx <= e) return Math.max(idx, s);
+    }
+    return -1;
+  }
 }
 
 export async function loadFromUrl(url) {

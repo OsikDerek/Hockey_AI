@@ -144,8 +144,22 @@ async function loadData(payloadOrUrl, fromFile = false) {
 
 function renderEventMarkers() {
   eventMarkersEl.innerHTML = "";
-  if (!data || data.totalFrames <= 1 || !data.events.length) return;
+  if (!data || data.totalFrames <= 1) return;
   const total = data.totalFrames - 1;
+
+  // Calibration coverage bands first (drawn under the markers so markers
+  // remain crisp). Each contiguous calibrated range becomes a thin green
+  // bar; the rest of the scrubber implicitly shows as "no data."
+  for (const [s, e] of data.calibratedRanges()) {
+    const left = (s / total) * 100;
+    const width = ((e - s + 1) / total) * 100;
+    const band = document.createElement("div");
+    band.className = "calib-band";
+    band.style.left = `${left}%`;
+    band.style.width = `${Math.max(0.2, width)}%`;
+    eventMarkersEl.appendChild(band);
+  }
+
   for (const ev of data.events) {
     const pct = (ev.frame_idx / total) * 100;
     const marker = document.createElement("div");
@@ -199,7 +213,9 @@ function updateFrameDisplay() {
   if (!playback) return;
   const idx = Math.floor(playback.frameIdx);
   scrubber.value = idx;
-  frameCounter.textContent = `${idx} / ${data.totalFrames - 1}`;
+  const fr = data.frameAt(idx);
+  const calibTag = fr && !fr.calibrated ? " · NO POSITION DATA" : "";
+  frameCounter.textContent = `${idx} / ${data.totalFrames - 1}${calibTag}`;
   timeCounter.textContent = `${playback.currentTimestamp().toFixed(2)}s`;
   // Banner update too, in case scrubbing landed inside an event window
   // even though applyFrame returned early (uncalibrated frame).
@@ -213,7 +229,11 @@ function applyFrame(fr) {
   // for everyone instead of hiding the scene. Calibration drops in/out
   // frequently in broadcast follow-cam, so erasing the world every dropout
   // makes the playback unwatchable.
-  if (!fr.calibrated) return;
+  if (!fr.calibrated) {
+    // Silently hold the last known avatar positions and bail. Banner /
+    // arrow updates still flow through updateFrameDisplay().
+    return;
+  }
 
   const fps = data.fps;
   const dt = 1.0 / fps;
@@ -245,8 +265,8 @@ function applyFrame(fr) {
   // Avatars not seen this calibrated frame: hide only if they've been
   // missing for a while (>STALE_FRAMES). Calibration drops in/out across
   // 70-90% of frames in broadcast follow-cam, so we hold avatars for
-  // several seconds of real time before hiding them.
-  const STALE_FRAMES = Math.max(60, Math.round(fps * 3.0));
+  // ~5s of real time before hiding them.
+  const STALE_FRAMES = Math.max(60, Math.round(fps * 5.0));
   for (const [tid, entry] of avatars) {
     if (seenIds.has(tid)) continue;
     if (entry.lastFrameIdx >= 0 && currentFrameIdx - entry.lastFrameIdx > STALE_FRAMES) {
@@ -335,6 +355,19 @@ function activeCamera() {
 function tick(nowMs) {
   if (playback) {
     playback.tick(nowMs);
+    // Auto-skip uncalibrated gaps during playback so the user doesn't
+    // stare at empty ice for stretches where the model lost the rink.
+    // Only kicks in while playing — manual scrubbing still lands wherever
+    // the user dragged to (with a visible "no positions" hint).
+    if (playback.playing && data) {
+      const idx = Math.floor(playback.frameIdx);
+      const fr = data.frameAt(idx);
+      if (fr && !fr.calibrated) {
+        const next = data.nextCalibratedFrom(idx);
+        if (next > idx) playback.setFrame(next);
+        else if (next < 0) playback.pause();
+      }
+    }
     applyFrame(playback.currentFrame());
     updateFrameDisplay();
   }

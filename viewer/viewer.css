@@ -103,9 +103,11 @@ html, body {
   z-index: 2;
 }
 
-/* Event markers floated over the scrubber. Each marker is a thin colored
-   tick whose position is derived from event.frame_idx / total_frames.
-   Click jumps the playback to that frame; hover shows a tooltip. */
+/* Event markers + calibration coverage bands floated over the scrubber.
+   - .calib-band: thin green bar showing where positional data exists.
+   - .event-marker: colored tick at each event's frame_idx.
+   Click event markers to jump. The bands are pointer-events:none so the
+   slider underneath stays draggable through them. */
 #event-markers {
   position: absolute;
   top: 8px;
@@ -114,6 +116,15 @@ html, body {
   height: 8px;
   pointer-events: none;
   z-index: 1;
+}
+
+.calib-band {
+  position: absolute;
+  top: 6px;
+  height: 2px;
+  background: rgba(80, 220, 140, 0.55);
+  pointer-events: none;
+  border-radius: 1px;
 }
 
 .event-marker {
