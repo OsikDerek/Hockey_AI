@@ -197,6 +197,20 @@ html, body {
 }
 #pov-status.hidden { display: none; }
 
+#hud-counter {
+  position: absolute;
+  top: 60px;
+  left: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #aaa;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  z-index: 11;
+  pointer-events: none;
+}
+
 #play-btn {
   background: #1f6feb;
   color: #fff;

@@ -25,6 +25,7 @@ const eventMarkersEl = document.getElementById("event-markers");
 const eventTooltipEl = document.getElementById("event-tooltip");
 const eventBannerEl = document.getElementById("active-event-banner");
 const povStatusEl = document.getElementById("pov-status");
+const hudCounterEl = document.getElementById("hud-counter");
 
 // ── Three.js scene
 const scene = new THREE.Scene();
@@ -94,6 +95,11 @@ buildCameras();
 
 // ── Avatar registry
 const avatars = new Map(); // track_id -> { mesh, lastPos, lastFrameIdx }
+// POV mode hides the carrier's own avatar so the camera isn't looking
+// through its head. We track the hidden mesh so we can restore it when
+// the user switches modes or POV target.
+let povHiddenAvatar = null;
+let povWasVisible = true;
 
 function getOrCreateAvatar(trackId, team, isGoalie = false) {
   if (avatars.has(trackId)) return avatars.get(trackId);
@@ -274,6 +280,15 @@ function applyFrame(fr) {
 
   for (const p of fr.players || []) applyOne(p, false);
   for (const g of fr.goalies || []) applyOne(g, true);
+
+  // HUD: how many avatars are currently rendered vs the per-frame raw
+  // detection count. Helps diagnose "where are my players" — if rawN is
+  // low the data is sparse; if rawN is high but visibleN is low something
+  // is hiding them.
+  const rawN = (fr.players?.length || 0) + (fr.goalies?.length || 0);
+  let visibleN = 0;
+  for (const e of avatars.values()) if (e.mesh.visible) visibleN++;
+  hudCounterEl.textContent = `${visibleN} avatars · ${rawN} this frame · ${avatars.size} total tracks`;
   // Avatars not seen this calibrated frame: hide only if they've been
   // missing for a while (>STALE_FRAMES). Calibration drops in/out across
   // 70-90% of frames in broadcast follow-cam, so we hold avatars for
@@ -354,13 +369,30 @@ function updateActiveEventOverlays(frameIdx) {
 }
 
 function activeCamera() {
+  // First, restore visibility of any avatar that we previously hid as the
+  // POV target. This is cheap (single-mesh toggle) and keeps the logic
+  // local — we only have to hide the current POV target each frame.
+  if (povHiddenAvatar && (!povSelect.value || activeCamMode !== "pov")) {
+    povHiddenAvatar.visible = povWasVisible;
+    povHiddenAvatar = null;
+  }
+
   if (activeCamMode === "pov") {
     const tid = parseInt(povSelect.value);
     const entry = isNaN(tid) ? null : avatars.get(tid);
     const isLive = entry && entry.mesh.visible;
-    if (isLive) updatePOVCamera(cameras.pov, entry.mesh);
-    // POV-target hint: surface "OFF SCREEN" when the picked avatar isn't
-    // currently rendered (calibration gap, ID drop, or hasn't appeared yet).
+    if (isLive) {
+      updatePOVCamera(cameras.pov, entry.mesh);
+      // Hide the carrier's own avatar so the camera isn't staring through
+      // its own head + body. Restored by the cleanup block above when the
+      // user switches modes or POV target.
+      if (povHiddenAvatar !== entry.mesh) {
+        if (povHiddenAvatar) povHiddenAvatar.visible = povWasVisible;
+        povWasVisible = entry.mesh.visible;
+        povHiddenAvatar = entry.mesh;
+        entry.mesh.visible = false;
+      }
+    }
     if (!isNaN(tid)) {
       povStatusEl.classList.toggle("hidden", isLive || !povSelect.value);
     } else {
