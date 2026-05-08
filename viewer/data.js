@@ -52,7 +52,8 @@ export class PositionsData {
     return this.frames[Math.max(0, Math.min(this.frames.length - 1, idx))];
   }
 
-  /** Track ids that appear at least once. Useful for the POV picker. */
+  /** Track ids that appear at least once, sorted. Lightweight; primarily
+   *  used by callers that want every id no matter how transient. */
   knownPlayerIds() {
     const ids = new Set();
     for (const fr of this.frames) {
@@ -61,6 +62,42 @@ export class PositionsData {
       }
     }
     return [...ids].sort((a, b) => a - b);
+  }
+
+  /** Track ids worth showing in the POV picker — sorted by total frames
+   *  visible (most-present first). ByteTrack assigns lots of transient
+   *  1-frame IDs on broadcast clips; without a duration filter the picker
+   *  gets unusable. Returns [{trackId, frames, team}, ...] for the top
+   *  most-present tracks at or above `minFrames`. */
+  /** First frame index at which `trackId` is visible. -1 if never. */
+  firstFrameOfTrack(trackId) {
+    for (let i = 0; i < this.frames.length; i++) {
+      const fr = this.frames[i];
+      for (const p of fr.players || []) if (p.track_id === trackId) return i;
+      for (const g of fr.goalies || []) if (g.track_id === trackId) return i;
+    }
+    return -1;
+  }
+
+  povCandidates({ minFrames = 5, max = 30 } = {}) {
+    const counts = new Map();  // tid -> frames
+    for (const fr of this.frames) {
+      for (const p of fr.players || []) {
+        if (p.track_id === undefined || p.track_id < 0) continue;
+        counts.set(p.track_id, (counts.get(p.track_id) || 0) + 1);
+      }
+      for (const g of fr.goalies || []) {
+        if (g.track_id === undefined || g.track_id < 0) continue;
+        counts.set(g.track_id, (counts.get(g.track_id) || 0) + 1);
+      }
+    }
+    const list = [];
+    for (const [tid, frames] of counts) {
+      if (frames < minFrames) continue;
+      list.push({ trackId: tid, frames, team: this.dominantTeamFor(tid) });
+    }
+    list.sort((a, b) => b.frames - a.frames);
+    return list.slice(0, max);
   }
 
   dominantTeamFor(trackId) {

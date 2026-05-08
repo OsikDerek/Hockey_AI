@@ -24,6 +24,7 @@ const speedSelect = document.getElementById("speed");
 const eventMarkersEl = document.getElementById("event-markers");
 const eventTooltipEl = document.getElementById("event-tooltip");
 const eventBannerEl = document.getElementById("active-event-banner");
+const povStatusEl = document.getElementById("pov-status");
 
 // ── Three.js scene
 const scene = new THREE.Scene();
@@ -200,13 +201,17 @@ function jumpToFrame(idx) {
 function populatePOVPicker() {
   povSelect.innerHTML = '<option value="">Pick player...</option>';
   if (!data) return;
-  for (const tid of data.knownPlayerIds()) {
+  // Show only tracks with real presence — ByteTrack assigns lots of
+  // 1-frame transient IDs on broadcast footage and they're useless POVs.
+  const candidates = data.povCandidates({ minFrames: 15, max: 30 });
+  for (const c of candidates) {
     const opt = document.createElement("option");
-    opt.value = String(tid);
-    opt.textContent = `Player #${tid} (${data.dominantTeamFor(tid)})`;
+    opt.value = String(c.trackId);
+    const teamLabel = c.team === "team_a" ? "A" : c.team === "team_b" ? "B" : "?";
+    opt.textContent = `#${c.trackId} (${teamLabel}, ${c.frames} frames)`;
     povSelect.appendChild(opt);
   }
-  povSelect.disabled = data.knownPlayerIds().length === 0;
+  povSelect.disabled = candidates.length === 0;
 }
 
 function updateFrameDisplay() {
@@ -236,32 +241,39 @@ function applyFrame(fr) {
   }
 
   const fps = data.fps;
-  const dt = 1.0 / fps;
   const seenIds = new Set();
   const currentFrameIdx = Math.floor(playback.frameIdx);
 
-  for (const p of fr.players || []) {
+  function applyOne(p, isGoalie) {
     const team = p.team || data.dominantTeamFor(p.track_id);
-    const entry = getOrCreateAvatar(p.track_id, team, false);
+    const entry = getOrCreateAvatar(p.track_id, team, isGoalie);
     const pos = { x: p.ice_x, y: p.ice_y };
-    const prev = entry.lastPos || pos;
-    updateAvatar(entry.mesh, prev, pos, dt);
+    // Real dt is derived from elapsed frames since this avatar was last
+    // updated. When the avatar reappears after a long absence
+    // (track-ID drop / calibration gap / scrub), treat it as a teleport
+    // so we don't compute a 1000 ft/s "speed" and spin the limbs.
+    const frameDelta = entry.lastFrameIdx >= 0
+      ? Math.max(1, currentFrameIdx - entry.lastFrameIdx)
+      : 1;
+    const TELEPORT_FRAMES = Math.round(fps * 0.5); // >0.5s gap = treat as teleport
+    if (frameDelta > TELEPORT_FRAMES || !entry.lastPos) {
+      // Snap to new position; reset velocity history and cycle phase so
+      // the skating animation doesn't jolt.
+      entry.mesh.position.set(pos.x, 0, pos.y);
+      entry.mesh.userData.cyclePhase = 0;
+      entry.lastPos = pos;
+    } else {
+      const dt = frameDelta / fps;
+      updateAvatar(entry.mesh, entry.lastPos, pos, dt);
+      entry.lastPos = pos;
+    }
     entry.mesh.visible = true;
-    entry.lastPos = pos;
     entry.lastFrameIdx = currentFrameIdx;
     seenIds.add(p.track_id);
   }
-  for (const g of fr.goalies || []) {
-    const team = g.team || data.dominantTeamFor(g.track_id);
-    const entry = getOrCreateAvatar(g.track_id, team, true);
-    const pos = { x: g.ice_x, y: g.ice_y };
-    const prev = entry.lastPos || pos;
-    updateAvatar(entry.mesh, prev, pos, dt);
-    entry.mesh.visible = true;
-    entry.lastPos = pos;
-    entry.lastFrameIdx = currentFrameIdx;
-    seenIds.add(g.track_id);
-  }
+
+  for (const p of fr.players || []) applyOne(p, false);
+  for (const g of fr.goalies || []) applyOne(g, true);
   // Avatars not seen this calibrated frame: hide only if they've been
   // missing for a while (>STALE_FRAMES). Calibration drops in/out across
   // 70-90% of frames in broadcast follow-cam, so we hold avatars for
@@ -345,9 +357,18 @@ function activeCamera() {
   if (activeCamMode === "pov") {
     const tid = parseInt(povSelect.value);
     const entry = isNaN(tid) ? null : avatars.get(tid);
-    if (entry && entry.mesh.visible) updatePOVCamera(cameras.pov, entry.mesh);
+    const isLive = entry && entry.mesh.visible;
+    if (isLive) updatePOVCamera(cameras.pov, entry.mesh);
+    // POV-target hint: surface "OFF SCREEN" when the picked avatar isn't
+    // currently rendered (calibration gap, ID drop, or hasn't appeared yet).
+    if (!isNaN(tid)) {
+      povStatusEl.classList.toggle("hidden", isLive || !povSelect.value);
+    } else {
+      povStatusEl.classList.add("hidden");
+    }
     return cameras.pov;
   }
+  povStatusEl.classList.add("hidden");
   return cameras[activeCamMode];
 }
 
@@ -416,6 +437,21 @@ scrubber.addEventListener("input", (e) => {
 
 speedSelect.addEventListener("change", (e) => {
   if (playback) playback.setSpeed(parseFloat(e.target.value));
+});
+
+povSelect.addEventListener("change", (e) => {
+  // Auto-jump to the first frame this track is visible — otherwise the
+  // POV camera stares into empty space until the player happens to appear.
+  if (!data || !playback) return;
+  const tid = parseInt(e.target.value);
+  if (isNaN(tid)) return;
+  const first = data.firstFrameOfTrack(tid);
+  if (first >= 0) {
+    // Land on the first calibrated frame at or after the player's debut so
+    // we have positions to render the avatar from.
+    const target = data.nextCalibratedFrom(first);
+    jumpToFrame(target >= 0 ? target : first);
+  }
 });
 
 // Auto-load via ?data=URL query param so scripts/serve_viewer.py can deep-link.
