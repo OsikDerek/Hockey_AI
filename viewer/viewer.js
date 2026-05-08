@@ -1,4 +1,5 @@
 // Hockey AI 3D viewer entry point.
+// Errors surface in #data-status via the inline handler in index.html.
 import * as THREE from "./lib/three.module.js";
 import { buildRink, RINK_LENGTH_FT, RINK_WIDTH_FT, CENTER_X, CENTER_Y } from "./rink.js";
 import { createAvatar, updateAvatar, createPuck } from "./avatar.js";

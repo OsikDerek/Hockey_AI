@@ -41,6 +41,18 @@
   <div id="event-tooltip" class="hidden"></div>
   <div id="active-event-banner" class="hidden"></div>
 
+  <!-- Surface JS errors visibly on the page; runs before the module loads
+       so that even a parse error in viewer.js shows up in #data-status. -->
+  <script>
+    window.addEventListener("error", (e) => {
+      const el = document.getElementById("data-status");
+      if (el) el.textContent = `JS error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`;
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      const el = document.getElementById("data-status");
+      if (el) el.textContent = `Rejection: ${e.reason?.message ?? e.reason}`;
+    });
+  </script>
   <script type="module" src="viewer.js"></script>
 </body>
 </html>
