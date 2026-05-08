@@ -20,6 +20,106 @@ from typing import Optional
 from .game_context import TrackedObject
 
 
+def describe_jersey_color(center: np.ndarray, mode: str) -> str:
+    """Return a short human-readable color label for a cluster center.
+
+    `mode` is "bgr" or "lab" (matches TeamClassifier._feature_mode). LAB
+    centers carry only (a, b) — L is discarded during clustering — so we
+    estimate lightness from saturation: very low chroma → pick "dark" or
+    "light/white" by sign of L if available, else fall back to "neutral".
+    BGR centers are 3D so we infer dominant hue + lightness directly.
+    """
+    if center is None:
+        return "?"
+    c = np.asarray(center, dtype=np.float64)
+
+    if mode == "bgr":
+        b, g, r = float(c[0]), float(c[1]), float(c[2])
+        lightness = (b + g + r) / 3.0
+        chroma = max(b, g, r) - min(b, g, r)
+        # Achromatic
+        if chroma < 25:
+            if lightness < 60:
+                return "dark/black"
+            if lightness > 170:
+                return "white/light"
+            return "gray"
+        # Pick the 1-2 dominant channels
+        if r > g and r > b:
+            if g > b * 1.3:
+                return "orange/yellow" if lightness > 120 else "red/orange"
+            return "red"
+        if g > r and g > b:
+            return "green"
+        if b > r and b > g:
+            if g > r * 1.3:
+                return "teal/cyan"
+            return "blue"
+        return "mixed"
+
+    # LAB mode: c is (a, b) where a ∈ [-128,127] (green-red), b ∈ [-128,127] (blue-yellow).
+    # L was discarded so we don't have explicit lightness — describe by hue only.
+    a, bv = float(c[0]), float(c[1])
+    chroma = (a * a + bv * bv) ** 0.5
+    if chroma < 6:
+        # Near-neutral cluster center in chroma — likely a dark or light jersey
+        # whose distinguishing signal is in L (which clustering ignored).
+        # Caller can disambiguate via BGR if needed.
+        return "neutral (dark or white)"
+    # Hue angle from a-b plane
+    angle = np.degrees(np.arctan2(bv, a))  # 0=red(+a), 90=yellow(+b), 180=green(-a), -90=blue(-b)
+    if -30 <= angle < 30:
+        return "red"
+    if 30 <= angle < 70:
+        return "orange/yellow"
+    if 70 <= angle < 110:
+        return "yellow"
+    if 110 <= angle < 160:
+        return "green"
+    if 160 <= angle <= 180 or -180 <= angle < -130:
+        return "teal/cyan"
+    if -130 <= angle < -70:
+        return "blue"
+    if -70 <= angle < -30:
+        return "purple/pink"
+    return "mixed"
+
+
+def match_jersey_to_team(description: str, centers: np.ndarray, mode: str) -> Optional[str]:
+    """Resolve a user-supplied color string to "team_a" or "team_b".
+
+    Strategy: describe each cluster center via describe_jersey_color, then
+    pick whichever description shares the most lowercase tokens with the
+    user input. Returns None if neither center has any token overlap.
+
+    Examples that work: "dark", "black", "white", "red", "blue/red".
+    Hex codes like "#FF0000" are not supported here — keep the surface
+    small until we need it.
+    """
+    if centers is None or len(centers) < 2:
+        return None
+    user_tokens = {t.strip().lower() for t in description.replace("/", " ").split() if t.strip()}
+    if not user_tokens:
+        return None
+
+    desc_a = describe_jersey_color(centers[0], mode).lower()
+    desc_b = describe_jersey_color(centers[1], mode).lower()
+    a_tokens = set(desc_a.replace("/", " ").split())
+    b_tokens = set(desc_b.replace("/", " ").split())
+
+    overlap_a = len(user_tokens & a_tokens)
+    overlap_b = len(user_tokens & b_tokens)
+
+    if overlap_a == 0 and overlap_b == 0:
+        return None
+    if overlap_a > overlap_b:
+        return "team_a"
+    if overlap_b > overlap_a:
+        return "team_b"
+    # Tie — refuse rather than pick wrong
+    return None
+
+
 def _numpy_kmeans(data: np.ndarray, k: int = 2, max_iter: int = 30) -> tuple:
     """Minimal K-means using only numpy with k-means++ init."""
     if len(data) < k:
@@ -250,12 +350,17 @@ class TeamClassifier:
         self._is_warmed_up = True
 
         center_dist = float(np.linalg.norm(self._centers[0] - self._centers[1]))
+        desc_a = describe_jersey_color(self._centers[0], self._feature_mode)
+        desc_b = describe_jersey_color(self._centers[1], self._feature_mode)
         print(
             f"  TeamClassifier: mode={self._feature_mode} "
             f"(bgr_q={bgr_q:.2f}, lab_q={lab_q:.2f}). "
-            f"Center A={self._centers[0].astype(int).tolist()} "
-            f"Center B={self._centers[1].astype(int).tolist()} dist={center_dist:.1f}"
+            f"Center A={self._centers[0].astype(int).tolist()} ({desc_a}) "
+            f"Center B={self._centers[1].astype(int).tolist()} ({desc_b}) "
+            f"dist={center_dist:.1f}"
         )
+        print(f"  Teams identified: A={desc_a}, B={desc_b} "
+              f"(use --focus-team a|b or --focus-jersey \"<color>\" to filter overlays)")
         warn_threshold = 8.0 if self._feature_mode == "lab" else 15.0
         if center_dist < warn_threshold:
             print(

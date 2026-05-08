@@ -11,6 +11,8 @@ import os
 import sys
 import time
 
+from typing import Optional
+
 import cv2
 import numpy as np
 
@@ -23,7 +25,7 @@ from .play_evaluator import PlayEvaluator
 from .lane_calculator import LaneCalculator
 from .space_detector import SpaceDetector
 from .game_annotator import GameAnnotator
-from .team_classifier import TeamClassifier
+from .team_classifier import TeamClassifier, match_jersey_to_team
 from .game_report import GameReportGenerator
 from .rink_calibrator import RinkCalibrator
 from .decisions import DECISION_REGISTRY
@@ -305,6 +307,22 @@ def run_game_analysis_mode(args, meta):
         print(f"  Overlay confidence gate: {kept}/{total} events "
               f"≥ {decision_conf:.2f}")
 
+    # Focus gate: when reviewing your own film, filter overlays to events
+    # whose actor is on the chosen team. --focus-jersey resolves to a team
+    # label via the classifier's cluster centers; --focus-team is the
+    # explicit fallback. Both leave analysis.events untouched.
+    focus_team = _resolve_focus_team(args, team_classifier)
+    if focus_team in ("team_a", "team_b") and overlay_events:
+        before = len(overlay_events)
+        overlay_events = [
+            e for e in overlay_events
+            if e.player_id is not None
+            and 0 <= e.frame_idx < len(team_data)
+            and team_data[e.frame_idx].get(e.player_id) == focus_team
+        ]
+        print(f"  Focus filter: keeping {len(overlay_events)}/{before} events "
+              f"for {focus_team.replace('_', ' ').upper()}")
+
     event_timeline = {}  # frame_idx -> phase_info
     for event in overlay_events:
         fs, fe, fi = event.frame_start, event.frame_end, event.frame_idx
@@ -352,6 +370,14 @@ def run_game_analysis_mode(args, meta):
         for i, (frame, ctx) in enumerate(zip(frame_data, analysis.frame_contexts)):
             # Only high-confidence events trigger banners / decision overlays.
             events = analysis.events_at_frame(i, min_confidence=decision_conf)
+            # Apply focus-team filter (matches the event_timeline filter above).
+            if focus_team in ("team_a", "team_b"):
+                events = [
+                    e for e in events
+                    if e.player_id is not None
+                    and 0 <= e.frame_idx < len(team_data)
+                    and team_data[e.frame_idx].get(e.player_id) == focus_team
+                ]
             annotator.set_team_assignments(team_data[i])
 
             phase_info = event_timeline.get(i)
@@ -590,6 +616,34 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
     print(f"  Positions JSON: {json_path} (in-rink: {quality_pct:.1f}%)")
+
+
+def _resolve_focus_team(args, team_classifier) -> Optional[str]:
+    """Decide which team (if any) to focus overlays on.
+
+    `--focus-jersey "<color>"` wins when supplied — resolved against the
+    classifier's cluster centers. Else `--focus-team {a,b,both}` is used.
+    Returns "team_a", "team_b", or None (= no filter).
+    """
+    jersey = getattr(args, "focus_jersey", None)
+    if jersey:
+        summary = team_classifier.summary()
+        centers = summary.get("centers")
+        mode = summary.get("feature_mode")
+        if centers and mode:
+            resolved = match_jersey_to_team(jersey, np.array(centers), mode)
+            if resolved is not None:
+                print(f"  Focus jersey '{jersey}' resolved to {resolved.replace('_', ' ').upper()}")
+                return resolved
+            print(f"  Focus jersey '{jersey}' could not be resolved against detected "
+                  f"clusters; falling back to --focus-team")
+
+    focus = getattr(args, "focus_team", "both")
+    if focus == "a":
+        return "team_a"
+    if focus == "b":
+        return "team_b"
+    return None
 
 
 def _split_teams(players, carrier_id, team_assignments):

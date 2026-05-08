@@ -95,6 +95,24 @@ def parse_args():
              "to render every detected event (legacy behavior).",
     )
     parser.add_argument(
+        "--focus-team",
+        default="both",
+        choices=["a", "b", "both"],
+        help="Show overlays only for events involving the chosen team (default: "
+             "both). Use this when reviewing your own film: --focus-team a will "
+             "surface team A's offensive AND defensive moments while suppressing "
+             "events whose actor is on team B. Team identities are printed at "
+             "startup after the team-classifier warmup.",
+    )
+    parser.add_argument(
+        "--focus-jersey",
+        default=None,
+        help="Resolve focus team by jersey color description (e.g. \"dark\", "
+             "\"white\", \"red\", \"blue\"). Overrides --focus-team when both "
+             "are passed. Useful when you don't yet know which cluster will be "
+             "labeled A vs B for a given clip.",
+    )
+    parser.add_argument(
         "--technique", "-t",
         default=None,
         help="Technique to analyze (e.g., crossover, forward_stride). "
