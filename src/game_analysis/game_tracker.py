@@ -166,12 +166,13 @@ class GameTracker:
             except Exception:
                 pass  # Fallback is best-effort; never crash the pipeline
 
-        # Landmark specialist: when loaded, augment the main model's
-        # rink-landmark detections (centroid, faceoff, goal) with this
-        # 3-class focused model. We REPLACE the main model's landmark
-        # detections to avoid double-counting + give the specialist
-        # priority. Player / puck / goalie / referee classes are
-        # untouched (still come from the main HockeyAI model).
+        # Landmark specialist: when loaded, run alongside the main model
+        # to augment rink-landmark coverage. We UNION both sets of
+        # detections (deduping near-coincident centers within ~30 px) —
+        # specialist may catch landmarks the main model misses and vice
+        # versa, especially across different broadcast styles. Player /
+        # puck / goalie / referee classes still come from the main
+        # HockeyAI model only.
         if self.landmark_model is not None:
             try:
                 lm_results = self.landmark_model.predict(
@@ -179,9 +180,7 @@ class GameTracker:
                 )
                 if lm_results and len(lm_results) > 0:
                     landmark_objs = self._parse_landmark_results(lm_results[0])
-                    landmark_classes = {"centroid", "faceoff", "goal"}
-                    objects = [o for o in objects if o.class_name not in landmark_classes]
-                    objects.extend(landmark_objs)
+                    objects = self._merge_landmark_detections(objects, landmark_objs)
             except Exception:
                 # Best-effort: never break the main pipeline if the
                 # specialist crashes mid-frame.
@@ -196,6 +195,37 @@ class GameTracker:
 
         objects = self.puck_filter.filter(objects, frame)
         return objects
+
+    @staticmethod
+    def _merge_landmark_detections(existing: list, specialist: list,
+                                    dedup_radius_px: float = 30.0) -> list:
+        """Union main-model + specialist detections, dropping near-duplicates.
+
+        For each specialist detection, drop it if the existing list already
+        contains a same-class detection within `dedup_radius_px`. Keeps the
+        higher-confidence detection in case of ties (specialist wins).
+        """
+        if not specialist:
+            return existing
+        landmark_classes = {"centroid", "faceoff", "goal"}
+        out = list(existing)
+        for new_obj in specialist:
+            if new_obj.class_name not in landmark_classes:
+                continue
+            keep = True
+            for i, ex in enumerate(out):
+                if ex.class_name != new_obj.class_name:
+                    continue
+                dx = ex.center[0] - new_obj.center[0]
+                dy = ex.center[1] - new_obj.center[1]
+                if dx * dx + dy * dy < dedup_radius_px * dedup_radius_px:
+                    if new_obj.confidence > ex.confidence:
+                        out[i] = new_obj  # specialist replaces lower-conf existing
+                    keep = False
+                    break
+            if keep:
+                out.append(new_obj)
+        return out
 
     def _parse_landmark_results(self, result) -> list:
         """Parse landmark-specialist detections.
