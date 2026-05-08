@@ -520,13 +520,15 @@ def run_game_analysis_mode(args, meta):
     # Per-frame ice-coordinate positions (Phase B0 data layer). Same shape
     # as NHL EDGE so Phase C can consume it for 3D scene reconstruction
     # without re-running CV.
-    _write_positions_json(args.output, analysis, meta, team_data)
+    _write_positions_json(args.output, analysis, meta, team_data,
+                          decision_conf=decision_conf)
 
     return analysis
 
 
-def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
-    """Dump per-frame ice positions for every tracked object."""
+def _write_positions_json(output_path: str, analysis, meta, team_data,
+                          decision_conf: float = 0.7) -> None:
+    """Dump per-frame ice positions + high-confidence events for the 3D viewer."""
     import json
     from .rink_calibrator import RINK_LENGTH_FT, RINK_WIDTH_FT
 
@@ -600,6 +602,35 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
     homography_pct = (
         100.0 * homography_frames / max(total_calibrated_frames, 1)
     )
+
+    # Emit high-confidence events for the viewer's timeline + 3D overlays.
+    # Same threshold as the rendered video so the viewer agrees with the
+    # video's banners. All events are kept in analysis.events for any
+    # consumer that wants the full firehose.
+    events_out = []
+    for ev in analysis.events:
+        if ev.confidence < decision_conf:
+            continue
+        # Look up the actor's team at the event frame
+        team = None
+        if (ev.player_id is not None and 0 <= ev.frame_idx < len(team_data)):
+            team = team_data[ev.frame_idx].get(ev.player_id)
+        rating = None
+        if ev.evaluation:
+            rating = ev.evaluation.get("rating")
+        events_out.append({
+            "frame_idx": int(ev.frame_idx),
+            "frame_start": int(ev.frame_start),
+            "frame_end": int(ev.frame_end),
+            "timestamp_sec": round(float(ev.timestamp_sec), 3),
+            "event_type": ev.event_type,
+            "decision_made": ev.decision_made,
+            "player_id": int(ev.player_id) if ev.player_id is not None else None,
+            "team": team,
+            "confidence": round(float(ev.confidence), 3),
+            "rating": rating,
+        })
+
     payload = {
         "rink": {"length_ft": RINK_LENGTH_FT, "width_ft": RINK_WIDTH_FT},
         "fps": meta.get("fps", 30.0),
@@ -611,6 +642,7 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
             "homography_frames": homography_frames,
             "homography_pct": round(homography_pct, 1),
         },
+        "events": events_out,
         "frames": frames_out,
     }
     with open(json_path, "w", encoding="utf-8") as f:

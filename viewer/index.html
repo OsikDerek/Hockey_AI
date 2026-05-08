@@ -25,7 +25,10 @@
 
   <div id="ui-bottom">
     <button id="play-btn">Play</button>
-    <input type="range" id="scrubber" min="0" max="0" value="0" step="1" />
+    <div id="scrubber-wrap">
+      <input type="range" id="scrubber" min="0" max="0" value="0" step="1" />
+      <div id="event-markers"></div>
+    </div>
     <span id="frame-counter">0 / 0</span>
     <span id="time-counter">0.00s</span>
     <select id="speed">
@@ -34,6 +37,9 @@
       <option value="2">2x</option>
     </select>
   </div>
+
+  <div id="event-tooltip" class="hidden"></div>
+  <div id="active-event-banner" class="hidden"></div>
 
   <script type="module" src="viewer.js"></script>
 </body>

@@ -5,6 +5,13 @@
 //   "rink": {"length_ft": 200, "width_ft": 85},
 //   "fps": 30,
 //   "calibration_quality": {...},
+//   "events": [{
+//     "frame_idx": 142, "frame_start": 122, "frame_end": 162,
+//     "timestamp_sec": 4.73,
+//     "event_type": "shot_vs_pass", "decision_made": "shot",
+//     "player_id": 12, "team": "team_a",
+//     "confidence": 0.82, "rating": "good"
+//   }],
 //   "frames": [{
 //     "frame_idx": 0,
 //     "timestamp_sec": 0.0,
@@ -21,6 +28,7 @@ export class PositionsData {
     this.rink = payload.rink;
     this.fps = payload.fps ?? 30;
     this.calibrationQuality = payload.calibration_quality ?? null;
+    this.events = payload.events || [];
     this.frames = payload.frames || [];
     // Build a mapping from track_id -> the team it most often appears with
     this._dominantTeam = new Map();
@@ -57,6 +65,13 @@ export class PositionsData {
 
   dominantTeamFor(trackId) {
     return this._dominantTeam.get(trackId) ?? "unknown";
+  }
+
+  /** Events whose [frame_start, frame_end] window contains the given frame. */
+  eventsAtFrame(frameIdx) {
+    return this.events.filter(
+      (e) => e.frame_start <= frameIdx && frameIdx <= e.frame_end
+    );
   }
 }
 
