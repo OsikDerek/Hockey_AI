@@ -95,11 +95,6 @@ buildCameras();
 
 // ── Avatar registry
 const avatars = new Map(); // track_id -> { mesh, lastPos, lastFrameIdx }
-// POV mode hides the carrier's own avatar so the camera isn't looking
-// through its head. We track the hidden mesh so we can restore it when
-// the user switches modes or POV target.
-let povHiddenAvatar = null;
-let povWasVisible = true;
 
 function getOrCreateAvatar(trackId, team, isGoalie = false) {
   if (avatars.has(trackId)) return avatars.get(trackId);
@@ -369,30 +364,14 @@ function updateActiveEventOverlays(frameIdx) {
 }
 
 function activeCamera() {
-  // First, restore visibility of any avatar that we previously hid as the
-  // POV target. This is cheap (single-mesh toggle) and keeps the logic
-  // local — we only have to hide the current POV target each frame.
-  if (povHiddenAvatar && (!povSelect.value || activeCamMode !== "pov")) {
-    povHiddenAvatar.visible = povWasVisible;
-    povHiddenAvatar = null;
-  }
-
   if (activeCamMode === "pov") {
     const tid = parseInt(povSelect.value);
     const entry = isNaN(tid) ? null : avatars.get(tid);
     const isLive = entry && entry.mesh.visible;
-    if (isLive) {
-      updatePOVCamera(cameras.pov, entry.mesh);
-      // Hide the carrier's own avatar so the camera isn't staring through
-      // its own head + body. Restored by the cleanup block above when the
-      // user switches modes or POV target.
-      if (povHiddenAvatar !== entry.mesh) {
-        if (povHiddenAvatar) povHiddenAvatar.visible = povWasVisible;
-        povWasVisible = entry.mesh.visible;
-        povHiddenAvatar = entry.mesh;
-        entry.mesh.visible = false;
-      }
-    }
+    if (isLive) updatePOVCamera(cameras.pov, entry.mesh);
+    // POV target hint when the picked player isn't currently rendered.
+    // We intentionally keep the carrier's own avatar visible so future
+    // animations of their hands / stick can render in the POV view.
     if (!isNaN(tid)) {
       povStatusEl.classList.toggle("hidden", isLive || !povSelect.value);
     } else {

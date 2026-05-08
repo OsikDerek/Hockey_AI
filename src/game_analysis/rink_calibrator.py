@@ -30,7 +30,6 @@ Ice coordinates use the standard NHL convention: x in [0, 200] running
 goal-line to goal-line, y in [0, 85] running board-to-board, units feet.
 """
 
-from collections import deque
 from typing import Optional
 
 import cv2
@@ -91,12 +90,6 @@ class RinkCalibrator:
         landmark_conf_floor: float = 0.25,       # accept lower-conf rink-landmark detections
                                                   # to feed B1; quality is checked downstream
                                                   # via the homography's reproj-error gate
-        landmark_buffer_frames: int = 15,        # accumulate correspondences across this
-                                                  # many recent frames (~0.5s @ 30fps) since
-                                                  # the YOLO model rarely surfaces ≥4
-                                                  # landmarks in any one frame; the
-                                                  # reproj-error gate / RANSAC reject stale
-                                                  # points when the camera pans
     ):
         self.ema_alpha = ema_alpha
         self.max_scale_change = max_scale_change
@@ -108,12 +101,6 @@ class RinkCalibrator:
         self.homography_min_correspondences = homography_min_correspondences
         self.faceoff_match_max_err_px = faceoff_match_max_err_px
         self.landmark_conf_floor = landmark_conf_floor
-        self.landmark_buffer_frames = landmark_buffer_frames
-
-        # Rolling correspondence buffer for B1: each entry is
-        # (frame_count_when_seen, ice_pt, pixel_pt). Pruned to the most
-        # recent landmark_buffer_frames frames each update.
-        self._landmark_buffer: deque = deque(maxlen=landmark_buffer_frames * 16)
 
         # Similarity transform (B0): ice (x_ft, y_ft) -> pixel (px, py)
         # px = origin_px[0] + scale * (cos*x_ft - sin*y_ft)
@@ -150,7 +137,6 @@ class RinkCalibrator:
         self._homography = None
         self._homography_inv = None
         self._homography_correspondences = 0
-        self._landmark_buffer.clear()
 
     def update(self, rink_landmarks: dict, frame_width: int, frame_height: int) -> None:
         """Per-frame calibration update with smoothing + outlier rejection."""
@@ -207,46 +193,37 @@ class RinkCalibrator:
         self, goals: list, centroids: list, faceoffs: list,
         left_goals: list, right_goals: list,
     ) -> None:
-        """Build correspondences from disambiguated landmarks, fit H, blend.
+        """Build correspondences from THIS frame's landmarks, fit H, blend.
 
-        Correspondences are accumulated across a short rolling buffer
-        (last ~0.5s of frames, cleared on camera cut) since the YOLO
-        model rarely shows ≥4 rink landmarks in a single frame. RANSAC
-        and the reprojection-error gate filter stale points when the
-        camera pans within the buffer window.
+        Earlier versions accumulated correspondences across a 15-frame
+        rolling buffer to scrape together ≥4 points. That backfired badly:
+        on a panning broadcast camera, stale pixel coords from older frames
+        formed a self-consistent inlier set that RANSAC happily fit, but the
+        resulting homography mapped the current pixel space to a tiny patch
+        of ice — players visibly stacked on top of each other near the
+        boards. We now require ≥4 correspondences in a SINGLE frame; the
+        homography will engage less often, but when it does it will be
+        spatially honest. Phase B2 (CV line detection) is the right way to
+        increase per-frame correspondence count.
         """
-        # Push this frame's correspondences into the rolling buffer.
+        ice_pts = []
+        pixel_pts = []
+
         if left_goals:
-            self._landmark_buffer.append(
-                (self._frame_count, (LEFT_GOAL_X_FT, CENTER_Y_FT), left_goals[0].center)
-            )
+            ice_pts.append((LEFT_GOAL_X_FT, CENTER_Y_FT))
+            pixel_pts.append(left_goals[0].center)
         if right_goals:
-            self._landmark_buffer.append(
-                (self._frame_count, (RIGHT_GOAL_X_FT, CENTER_Y_FT), right_goals[0].center)
-            )
+            ice_pts.append((RIGHT_GOAL_X_FT, CENTER_Y_FT))
+            pixel_pts.append(right_goals[0].center)
         if centroids:
-            self._landmark_buffer.append(
-                (self._frame_count, (CENTER_X_FT, CENTER_Y_FT), centroids[0].center)
-            )
+            ice_pts.append((CENTER_X_FT, CENTER_Y_FT))
+            pixel_pts.append(centroids[0].center)
         for ice_pt, pix_pt in self._disambiguate_faceoffs(faceoffs):
-            self._landmark_buffer.append((self._frame_count, ice_pt, pix_pt))
-
-        # Prune entries older than the buffer window.
-        cutoff = self._frame_count - self.landmark_buffer_frames
-        while self._landmark_buffer and self._landmark_buffer[0][0] < cutoff:
-            self._landmark_buffer.popleft()
-
-        # Deduplicate by ice point (keep the most-recent observation per dot,
-        # since the camera may have moved and the older pixel reading is stale).
-        latest_by_ice: dict = {}
-        for frame_n, ice_pt, pix_pt in self._landmark_buffer:
-            latest_by_ice[ice_pt] = (frame_n, pix_pt)
-
-        ice_pts = list(latest_by_ice.keys())
-        pixel_pts = [latest_by_ice[k][1] for k in ice_pts]
+            ice_pts.append(ice_pt)
+            pixel_pts.append(pix_pt)
 
         if len(ice_pts) < self.homography_min_correspondences:
-            return  # Not enough — keep prior homography (or stay similarity-only)
+            return  # Not enough this frame — keep prior homography (or stay similarity)
 
         ice_arr = np.array(ice_pts, dtype=np.float64)
         pixel_arr = np.array(pixel_pts, dtype=np.float64)
