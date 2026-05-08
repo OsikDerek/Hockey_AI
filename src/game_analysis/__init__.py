@@ -293,8 +293,19 @@ def run_game_analysis_mode(args, meta):
         print(f"  Ratings: {', '.join(f'{k}={v}' for k, v in ratings.items() if v > 0)}")
 
     # ── Build Event Timeline ─────────────────────────────
+    # Confidence gate: only events at or above the threshold drive overlays,
+    # banners, and freeze pauses. All events still live in analysis.events
+    # for downstream report writers — this only filters what paints on video.
+    decision_conf = float(getattr(args, "decision_conf", 0.7))
+    overlay_events = [e for e in analysis.events if e.confidence >= decision_conf]
+    if analysis.events:
+        kept = len(overlay_events)
+        total = len(analysis.events)
+        print(f"  Overlay confidence gate: {kept}/{total} events "
+              f"≥ {decision_conf:.2f}")
+
     event_timeline = {}  # frame_idx -> phase_info
-    for event in analysis.events:
+    for event in overlay_events:
         fs, fe, fi = event.frame_start, event.frame_end, event.frame_idx
 
         # Approach: event_start to decision-5
@@ -338,7 +349,8 @@ def run_game_analysis_mode(args, meta):
 
     with video_writer(args.output, fps=fps, width=out_w, height=out_h) as writer:
         for i, (frame, ctx) in enumerate(zip(frame_data, analysis.frame_contexts)):
-            events = analysis.events_at_frame(i)
+            # Only high-confidence events trigger banners / decision overlays.
+            events = analysis.events_at_frame(i, min_confidence=decision_conf)
             annotator.set_team_assignments(team_data[i])
 
             phase_info = event_timeline.get(i)

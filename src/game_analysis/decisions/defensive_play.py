@@ -111,6 +111,22 @@ class DefensivePlayDetector:
         # Count defenders in the area
         num_defenders = self._count_defenders(idx, ctx)
 
+        # Confidence: needs a real informative gap signal, not the default
+        # "contain" fallback that fires on any moving puck. Strong approach
+        # speed + meaningful gap change = textbook moment.
+        confidence = 0.25
+        if gap_change is not None and abs(gap_change) > 2.0:
+            confidence += 0.30
+        if defender_id is not None and defender_id >= 0:
+            confidence += 0.15
+        approach_strength = (approach_speed
+                             - self.approach_speed_threshold) / max(
+                                 self.approach_speed_threshold, 1e-6)
+        confidence += 0.20 * max(0.0, min(1.0, approach_strength))
+        if decision != "contain":
+            confidence += 0.15  # gap_close / pinch are decisive moments
+        confidence = max(0.0, min(1.0, confidence))
+
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
 
@@ -122,6 +138,7 @@ class DefensivePlayDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=defender_id,
+            confidence=confidence,
             context={
                 "gap_distance": round(gap_distance, 1),
                 "closing_speed": round(closing_speed, 1),

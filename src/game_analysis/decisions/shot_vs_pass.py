@@ -27,7 +27,7 @@ class ShotVsPassDetector:
     def __init__(
         self,
         velocity_threshold: float = 15.0,
-        min_offensive_frames: int = 5,
+        min_offensive_frames: int = 2,
         event_window: int = 15,
     ):
         """
@@ -65,19 +65,28 @@ class ShotVsPassDetector:
     def analyze(self, fps: float) -> list:
         """Detect all shot/pass events."""
         events = []
+        offensive_streak = 0
 
         for i in range(2, len(self._puck_positions)):
-            event = self._check_frame(i, fps)
+            # Per-frame offensive-zone streak (computed during analyze, not
+            # add_frame, so each candidate frame sees its own streak value
+            # rather than the post-loop final state).
+            if self._frames[i].zone == "offensive":
+                offensive_streak += 1
+            else:
+                offensive_streak = 0
+
+            event = self._check_frame(i, fps, offensive_streak)
             if event is not None:
                 events.append(event)
 
         return events
 
-    def _check_frame(self, idx: int, fps: float) -> Optional[GameEvent]:
+    def _check_frame(self, idx: int, fps: float, offensive_streak: int) -> Optional[GameEvent]:
         """Check if a shot/pass event occurs at this frame."""
         ctx = self._frames[idx]
 
-        # Throttle via cooldown: don't emit another release within 15 frames
+        # Throttle via cooldown: don't emit another release within ~1.5s
         if self._cooldown > 0:
             self._cooldown -= 1
             return None
@@ -86,6 +95,11 @@ class ShotVsPassDetector:
         if ctx.zone != "offensive":
             return None
         if ctx.possession_player_id is None:
+            return None
+
+        # Require sustained possession in offensive zone (filters single-frame
+        # zone glitches that previously fired releases on every puck twitch).
+        if offensive_streak < self.min_offensive_frames:
             return None
 
         # Check puck velocity
@@ -113,8 +127,8 @@ class ShotVsPassDetector:
         if prev_velocity > threshold * 0.7:
             return None  # Already moving fast, not a new release
 
-        # Classify: shot vs pass vs dump
-        decision = self._classify_release(idx, curr, prev, ctx)
+        # Classify: shot vs pass vs dump (returns decision + raw alignment score)
+        decision, decisiveness = self._classify_release(idx, curr, prev, ctx)
 
         # Count defenders in the lane
         defenders_blocking = self._count_lane_blockers(idx, ctx)
@@ -122,11 +136,20 @@ class ShotVsPassDetector:
         # Count open teammates
         open_teammates = self._count_open_teammates(idx, ctx)
 
+        # Confidence: starts modest, climbs with signal strength.
+        # Strong velocity spike (well above threshold) and decisive
+        # classification (clear shot/pass alignment) push toward 1.0.
+        velocity_strength = min(1.0, (velocity - threshold) / max(threshold, 1e-6))
+        confidence = 0.35 + 0.30 * velocity_strength + 0.25 * decisiveness
+        if ctx.possession_player_id < 0:  # Unknown carrier
+            confidence -= 0.20
+        confidence = max(0.0, min(1.0, confidence))
+
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
 
         # Set cooldown so we don't re-emit on the following frames of the same release
-        self._cooldown = 15
+        self._cooldown = 45
 
         return GameEvent(
             event_type="shot_vs_pass",
@@ -136,6 +159,7 @@ class ShotVsPassDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=ctx.possession_player_id,
+            confidence=confidence,
             context={
                 "puck_velocity": float(velocity),
                 "zone": ctx.zone,
@@ -147,8 +171,8 @@ class ShotVsPassDetector:
 
     def _classify_release(
         self, idx: int, puck_pos: np.ndarray, prev_pos: np.ndarray, ctx: FrameContext
-    ) -> str:
-        """Classify whether the release was a shot, pass, or dump."""
+    ) -> tuple:
+        """Classify the release. Returns (decision, decisiveness ∈ [0,1])."""
         puck_direction = puck_pos - prev_pos
         puck_dir_norm = puck_direction / (np.linalg.norm(puck_direction) + 1e-8)
 
@@ -157,18 +181,23 @@ class ShotVsPassDetector:
 
         # Check if puck is moving toward the DEFENDING goalie (goalie whose team != carrier's team)
         defending_goalie = self._select_defending_goalie(ctx, prev_pos, carrier_team)
+        best_goal_alignment = 0.0
         if defending_goalie is not None:
             goalie_pos = np.array(defending_goalie.center)
             to_goal = goalie_pos - prev_pos
             to_goal_norm = to_goal / (np.linalg.norm(to_goal) + 1e-8)
 
-            goal_alignment = np.dot(puck_dir_norm, to_goal_norm)
+            goal_alignment = float(np.dot(puck_dir_norm, to_goal_norm))
+            best_goal_alignment = goal_alignment
 
             if goal_alignment > 0.5:
-                return "shot"
+                # Decisiveness: how far above the 0.5 cutoff we landed.
+                decisiveness = min(1.0, (goal_alignment - 0.5) / 0.5)
+                return "shot", decisiveness
 
         # Check if puck is moving toward a TEAMMATE (same team as carrier)
         # If team labels aren't available (warmup), fall back to any non-carrier player
+        best_player_alignment = 0.0
         for player in ctx.players:
             if player.track_id == possessing_id:
                 continue
@@ -183,12 +212,17 @@ class ShotVsPassDetector:
                 continue
             to_player_norm = to_player / (dist_to_player + 1e-8)
 
-            player_alignment = np.dot(puck_dir_norm, to_player_norm)
+            player_alignment = float(np.dot(puck_dir_norm, to_player_norm))
+            if player_alignment > best_player_alignment:
+                best_player_alignment = player_alignment
 
             if player_alignment > 0.6:
-                return "pass"
+                decisiveness = min(1.0, (player_alignment - 0.6) / 0.4)
+                return "pass", decisiveness
 
-        return "dump"
+        # Dump — least confident classification by definition
+        # Decisiveness ≈ how clearly NOT a shot or pass it was.
+        return "dump", max(0.0, 0.5 - max(best_goal_alignment, best_player_alignment))
 
     def _select_defending_goalie(
         self, ctx: FrameContext, carrier_pos: np.ndarray, carrier_team: Optional[str]

@@ -221,6 +221,23 @@ class MissedOpportunityDetector:
         frame_start = max(0, peak_frame - self.event_window)
         frame_end = min(close_frame, peak_frame + self.event_window)
 
+        # Confidence: only flag textbook misses — high peak quality and a
+        # sustained window. Borderline opportunities get low confidence and
+        # get filtered out of overlays even though the report keeps them.
+        peak_pct = window.get("peak_pct", 0.0)
+        duration_frames = close_frame - window["start"]
+        threshold = (self.shot_threshold if opportunity_type == "shot"
+                     else self.pass_threshold)
+        # How far above the trigger threshold the peak landed (0..1).
+        margin = (peak_pct - threshold) / max(1.0 - threshold, 1e-6)
+        confidence = 0.30
+        confidence += 0.40 * max(0.0, min(1.0, margin))
+        if duration_frames >= 2 * self.min_window:
+            confidence += 0.20
+        if window.get("carrier_id") is not None:
+            confidence += 0.10
+        confidence = max(0.0, min(1.0, confidence))
+
         return GameEvent(
             event_type="missed_opportunity",
             frame_idx=peak_frame,
@@ -229,6 +246,7 @@ class MissedOpportunityDetector:
             timestamp_sec=peak_frame / fps,
             decision_made=f"missed_{opportunity_type}",
             player_id=window.get("carrier_id"),
+            confidence=confidence,
             context={
                 "opportunity_type": opportunity_type,
                 "peak_pct": window["peak_pct"],

@@ -81,13 +81,13 @@ class ForecheckDetector:
             if (defensive_streak - self.min_defensive_frames) % self.forecheck_cooldown != 0:
                 continue
 
-            event = self._evaluate_forecheck(i, fps)
+            event = self._evaluate_forecheck(i, fps, defensive_streak)
             if event is not None:
                 events.append(event)
 
         return events
 
-    def _evaluate_forecheck(self, idx: int, fps: float) -> Optional[GameEvent]:
+    def _evaluate_forecheck(self, idx: int, fps: float, defensive_streak: int) -> Optional[GameEvent]:
         """Evaluate the forecheck strategy at this frame."""
         ctx = self._frames[idx]
 
@@ -116,10 +116,32 @@ class ForecheckDetector:
             1 for d in pressure_distances if d < self.aggressive_distance
         )
 
+        # Tighten triggers: forecheck only fires with at least 2 players in
+        # the zone (so 1v0 / shootout-like frames don't get tagged as
+        # "passive forecheck"). Without a known carrier we suppress entirely
+        # — most "passive by unknown" events were noise from puck dropouts.
+        if players_in_zone < 2:
+            return None
+        if ctx.possession_player_id is None:
+            return None
+
         # Classify forecheck strategy
         decision = self._classify_forecheck(
             pressuring_count, closest_distance, players_in_zone
         )
+
+        # Confidence: known carrier + actual pressure + sustained D-zone time → high.
+        # "Passive" with no pressure is almost always uninformative.
+        confidence = 0.25
+        if pressuring_count >= 1:
+            confidence += 0.25
+        if pressuring_count >= 2:
+            confidence += 0.20
+        if defensive_streak > 30:
+            confidence += 0.15
+        if decision in ("aggressive", "moderate"):
+            confidence += 0.15
+        confidence = max(0.0, min(1.0, confidence))
 
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
@@ -132,6 +154,7 @@ class ForecheckDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=ctx.possession_player_id,
+            confidence=confidence,
             context={
                 "num_players_in_zone": players_in_zone,
                 "pressure_distance": round(closest_distance, 1),

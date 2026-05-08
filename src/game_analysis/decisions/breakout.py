@@ -108,6 +108,19 @@ class BreakoutDetector:
         # Check if breakout was successful (maintained possession for 1+ seconds after)
         success = self._check_breakout_success(idx, fps)
 
+        # Confidence: needs both possession info AND a real defensive-zone stay
+        # to be a true breakout (not a zone-classification glitch).
+        confidence = 0.30
+        if pre_possession is not None:
+            confidence += 0.20
+        if exit_possession is not None:
+            confidence += 0.20
+        if dzone_time >= 1.0:
+            confidence += 0.20
+        if exit_speed > 12:
+            confidence += 0.15
+        confidence = max(0.0, min(1.0, confidence))
+
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
 
@@ -119,6 +132,7 @@ class BreakoutDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=exit_possession or pre_possession,
+            confidence=confidence,
             context={
                 "dzone_time": round(dzone_time, 1),
                 "exit_speed": round(exit_speed, 1),

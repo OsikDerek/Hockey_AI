@@ -90,8 +90,25 @@ class OddManRushDetector:
         if rush_type is None:
             return None  # Not an odd-man rush
 
+        # Require a clear advantage (>=2 attackers vs defenders) to count as
+        # textbook OMR. Single-attacker scenarios get filtered to breakaways only.
+        advantage = attackers_ahead - defenders_ahead
+        if advantage < 2 and rush_type != "breakaway":
+            return None
+
         # Classify the decision (look ahead a few frames for resolution)
         decision = self._classify_decision(idx)
+
+        # Confidence: bigger advantage + higher speed + canonical rush type → high.
+        speed_strength = min(1.0, (carrier_speed - self.speed_threshold)
+                             / max(self.speed_threshold, 1e-6))
+        canonical = rush_type in ("breakaway", "2on1", "3on2", "2on0", "3on1")
+        confidence = 0.30
+        confidence += 0.20 * min(1.0, (advantage - 1) / 2.0)
+        confidence += 0.30 * speed_strength
+        if canonical:
+            confidence += 0.20
+        confidence = max(0.0, min(1.0, confidence))
 
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
@@ -104,6 +121,7 @@ class OddManRushDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=ctx.possession_player_id,
+            confidence=confidence,
             context={
                 "rush_type": rush_type,
                 "attackers_ahead": attackers_ahead,

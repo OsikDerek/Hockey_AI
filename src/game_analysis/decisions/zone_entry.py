@@ -96,6 +96,19 @@ class ZoneEntryDetector:
         # Determine entry speed (puck velocity around entry point)
         entry_speed = self._calc_entry_speed(idx)
 
+        # Confidence: known carrier + healthy entry speed = high; either-or = mid;
+        # both unknown / glitch = low.
+        confidence = 0.30
+        if pre_possession is not None:
+            confidence += 0.30
+        if post_possession is not None:
+            confidence += 0.10
+        if entry_speed > 15:
+            confidence += 0.30
+        elif entry_speed > 8:
+            confidence += 0.15
+        confidence = max(0.0, min(1.0, confidence))
+
         frame_start = max(0, idx - self.event_window)
         frame_end = min(len(self._frames) - 1, idx + self.event_window)
 
@@ -107,6 +120,7 @@ class ZoneEntryDetector:
             timestamp_sec=idx / fps,
             decision_made=decision,
             player_id=pre_possession,
+            confidence=confidence,
             context={
                 "pre_possession": pre_possession,
                 "post_possession": post_possession,

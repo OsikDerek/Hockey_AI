@@ -76,9 +76,11 @@ FULL_OVERLAYS = {
     "minimap": True,
 }
 
-# Phase A default: show only the things that work reliably without team
-# classification. Everything else is silenced until its underlying detection
-# is proven on a clip.
+# Phase A2 default: show reliable structural overlays plus high-confidence
+# decision moments. The decision-confidence gate (--decision-conf, default
+# 0.7) filters which events actually paint banners/freezes — so this preset
+# stays minimal in practice on noisy clips while still surfacing the
+# textbook critical moments coaches want to see.
 MINIMAL_OVERLAYS = {
     "boxes": True,
     "team_colors": True,
@@ -89,8 +91,8 @@ MINIMAL_OVERLAYS = {
     "open_spaces": False,
     "passing_lanes": False,
     "shooting_lane": False,
-    "decision_banner": False,
-    "decision_freeze": False,
+    "decision_banner": True,
+    "decision_freeze": True,
     "slowdown_indicator": False,
     "goalie_sight_lines": False,
     "frame_info_hud": True,

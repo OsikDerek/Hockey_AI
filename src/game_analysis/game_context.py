@@ -70,13 +70,16 @@ class GameEvent:
     decision_made: str = ""             # What the player actually did
     player_id: Optional[int] = None     # track_id of decision-maker
 
+    confidence: float = 0.5             # [0,1] — how textbook-clear the trigger was;
+                                         # overlays only render when >= --decision-conf
     context: dict = field(default_factory=dict)       # Situation details
     evaluation: Optional[dict] = None                 # Rating + suggested alternative
 
     def __repr__(self):
         return (
             f"GameEvent({self.event_type} at {self.timestamp_sec:.1f}s, "
-            f"decision={self.decision_made}, player={self.player_id})"
+            f"decision={self.decision_made}, player={self.player_id}, "
+            f"conf={self.confidence:.2f})"
         )
 
 
@@ -93,11 +96,12 @@ class GameAnalysis:
     zone_time: dict = field(default_factory=dict)          # zone -> seconds
     possession_time: dict = field(default_factory=dict)    # track_id -> seconds
 
-    def events_at_frame(self, frame_idx: int) -> list:
-        """Return all events active at this frame."""
+    def events_at_frame(self, frame_idx: int, min_confidence: float = 0.0) -> list:
+        """Return events active at this frame, optionally filtered by confidence."""
         return [
             e for e in self.events
             if e.frame_start <= frame_idx <= e.frame_end
+            and e.confidence >= min_confidence
         ]
 
     def summarize(self) -> dict:

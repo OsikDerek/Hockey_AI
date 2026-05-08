@@ -86,6 +86,15 @@ def parse_args():
         help="Comma-separated overlay features to suppress relative to preset",
     )
     parser.add_argument(
+        "--decision-conf",
+        type=float,
+        default=0.7,
+        help="Minimum decision confidence [0,1] required to render decision "
+             "banners and freeze frames (default: 0.7). All events stay in "
+             "the report regardless; this only gates video overlays. Set 0 "
+             "to render every detected event (legacy behavior).",
+    )
+    parser.add_argument(
         "--technique", "-t",
         default=None,
         help="Technique to analyze (e.g., crossover, forward_stride). "
