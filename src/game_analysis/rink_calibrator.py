@@ -35,7 +35,10 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .rink_lines import detect_rink_lines, sample_line_points
+from .rink_lines import (
+    detect_rink_lines, detect_rink_boards,
+    line_from_segment, line_intersection,
+)
 
 
 # NHL rink geometry (feet)
@@ -92,8 +95,7 @@ class RinkCalibrator:
         landmark_conf_floor: float = 0.25,       # accept lower-conf rink-landmark detections
                                                   # to feed B1; quality is checked downstream
                                                   # via the homography's reproj-error gate
-        # B2: classical CV line detection
-        line_samples_per_line: int = 7,          # points sampled along each detected line
+        # B2: classical CV line + board detection
         line_snap_tolerance_px: float = 80.0,    # max perpendicular distance from a
                                                   # detected pixel-line to the predicted
                                                   # projection of an ice-line for them to
@@ -109,7 +111,6 @@ class RinkCalibrator:
         self.homography_min_correspondences = homography_min_correspondences
         self.faceoff_match_max_err_px = faceoff_match_max_err_px
         self.landmark_conf_floor = landmark_conf_floor
-        self.line_samples_per_line = line_samples_per_line
         self.line_snap_tolerance_px = line_snap_tolerance_px
 
         # Similarity transform (B0): ice (x_ft, y_ft) -> pixel (px, py)
@@ -244,13 +245,14 @@ class RinkCalibrator:
             ice_pts.append(ice_pt)
             pixel_pts.append(pix_pt)
 
-        # B2: line correspondences augment YOLO point landmarks but never
-        # dominate them. Without ≥2 YOLO points, lines alone produce
-        # underconstrained / collinear correspondence sets that collapse
-        # the entire rink into a thin patch (visible as players stacking
-        # on top of each other).
-        yolo_point_count = len(ice_pts)
-        if frame is not None and yolo_point_count >= 2:
+        # B2: detect rink lines + boards and use line×board intersections
+        # as point correspondences. Each intersection has a TRUE ice
+        # coordinate (e.g., left blue × top boards = (75, 0)), so these
+        # are higher-quality than the similarity-derived line samples
+        # used in the earlier B2 attempt. The pixel-spread + rink-quad
+        # geometric checks downstream filter bad fits regardless of
+        # source.
+        if frame is not None:
             for ice_pt, pix_pt in self._extract_line_correspondences(frame):
                 ice_pts.append(ice_pt)
                 pixel_pts.append(pix_pt)
@@ -264,9 +266,8 @@ class RinkCalibrator:
         # Reject collinear / degenerate sets — needs 2D spread on both axes
         # in BOTH ice-coord AND pixel-coord space. Without the pixel-spread
         # check, we accept correspondence sets where all samples cluster
-        # along a single line in pixel space (e.g., 7 samples along one
-        # detected blue line) → the resulting homography is grossly
-        # underconstrained and collapses the rink to that line's neighborhood.
+        # along a single line in pixel space → the resulting homography is
+        # grossly underconstrained.
         if (np.ptp(ice_arr[:, 0]) < 20.0) or (np.ptp(ice_arr[:, 1]) < 5.0):
             return
         if (np.ptp(pixel_arr[:, 0]) < 100.0) or (np.ptp(pixel_arr[:, 1]) < 60.0):
@@ -335,28 +336,57 @@ class RinkCalibrator:
         self._homography_correspondences = int(len(ice_pts))
 
     def _extract_line_correspondences(self, frame: np.ndarray) -> list:
-        """B2: detect rink lines, match to known ice-line x-coords, sample points.
+        """B2: detect rink lines + boards, intersect them for point correspondences.
 
-        Each accepted detected line contributes `line_samples_per_line`
-        point pairs — pixel points along the detected segment, ice points
-        on the matched ice-line at y taken from the similarity transform.
-        The homography fit refines both x and y of each pair, so the
-        y-coord from the similarity only needs to be in the right
-        neighborhood.
+        The key insight: each detected rink line (blue/red) intersected with
+        a detected board edge gives a TRUE point correspondence at a known
+        ice coordinate — e.g., left blue × top boards = (75, 0). Two
+        intersections per rink line, both anchored, well-distributed in
+        pixel space. This is much better than sampling along the line
+        (correlated samples) because each pair has independent ice y info.
 
-        Matching is orientation-agnostic. Each known ice-line is projected
-        to pixels via the similarity transform as a SEGMENT (full top-to-
-        bottom span of the rink). Detected pixel lines are matched to
-        whichever predicted segment they lie closest to (perpendicular
-        midpoint distance + direction agreement).
+        Falls back to line-only sampling when boards aren't detected; both
+        paths feed the same homography fit downstream with safety guards.
         """
         if self._scale_px_per_ft is None or self._origin_px is None:
             return []
 
-        result = detect_rink_lines(frame)
-        if not result["blue"] and not result["red"]:
+        rink_lines = detect_rink_lines(frame)
+        if not rink_lines["blue"] and not rink_lines["red"]:
             return []
 
+        boards = detect_rink_boards(frame)
+        # Determine which detected board is "ice y=0" vs "y=85" using the
+        # similarity prior. Project the predicted top + bottom board
+        # midpoints, then assign whichever detected board is closer to each.
+        board_at_y0 = None  # ice y = 0
+        board_at_y85 = None  # ice y = 85
+        if boards["top"] is not None or boards["bottom"] is not None:
+            pred_y0 = self._similarity_ice_to_pixel((CENTER_X_FT, 0.0))
+            pred_y85 = self._similarity_ice_to_pixel((CENTER_X_FT, RINK_WIDTH_FT))
+            if pred_y0 is not None and pred_y85 is not None:
+                detected = []
+                if boards["top"] is not None:
+                    detected.append(("top", boards["top"]))
+                if boards["bottom"] is not None:
+                    detected.append(("bottom", boards["bottom"]))
+                # Score each detected board against each ice-y assignment
+                # by perpendicular distance from the predicted midpoint.
+                for label, board in detected:
+                    mid_px = ((board["p1"][0] + board["p2"][0]) / 2,
+                              (board["p1"][1] + board["p2"][1]) / 2)
+                    d_y0 = abs(board["a"] * pred_y0[0] + board["b"] * pred_y0[1] + board["c"])
+                    d_y85 = abs(board["a"] * pred_y85[0] + board["b"] * pred_y85[1] + board["c"])
+                    if d_y0 < d_y85:
+                        if board_at_y0 is None:
+                            board_at_y0 = board
+                    else:
+                        if board_at_y85 is None:
+                            board_at_y85 = board
+
+        # Predict each rink line as a pixel segment via similarity, then
+        # match each detected line to its closest prediction (orientation +
+        # distance agnostic — see _match_lines).
         blue_x_options = [BLUE_LINE_LEFT_X_FT, BLUE_LINE_RIGHT_X_FT]
         red_x_options = [LEFT_GOAL_X_FT, CENTER_X_FT, RIGHT_GOAL_X_FT]
 
@@ -370,21 +400,47 @@ class RinkCalibrator:
         blue_preds = [s for s in (predict_segment(x) for x in blue_x_options) if s]
         red_preds = [s for s in (predict_segment(x) for x in red_x_options) if s]
 
+        matched = []  # list of (ice_x, detected_pixel_line)
+        matched.extend(self._match_lines(rink_lines["blue"], blue_preds))
+        matched.extend(self._match_lines(rink_lines["red"], red_preds))
+
         pairs = []
-        pairs.extend(self._match_and_sample(result["blue"], blue_preds))
-        pairs.extend(self._match_and_sample(result["red"], red_preds))
+        for ice_x, det_line in matched:
+            det_eq = line_from_segment(det_line["p1"], det_line["p2"])
+            # PRIMARY: intersect with detected boards (true correspondences)
+            if board_at_y0 is not None:
+                isect = line_intersection(det_eq, board_at_y0)
+                if isect is not None:
+                    pairs.append(((float(ice_x), 0.0), (float(isect[0]), float(isect[1]))))
+            if board_at_y85 is not None:
+                isect = line_intersection(det_eq, board_at_y85)
+                if isect is not None:
+                    pairs.append(((float(ice_x), float(RINK_WIDTH_FT)),
+                                  (float(isect[0]), float(isect[1]))))
+            # FALLBACK: if no boards found, sample 3 points along the line
+            # with similarity-based y (less reliable but better than nothing)
+            if board_at_y0 is None and board_at_y85 is None:
+                for px, py in [det_line["p1"], det_line["mid"], det_line["p2"]]:
+                    tent = self._similarity_pixel_to_ice((px, py))
+                    if tent is None:
+                        continue
+                    y_clamped = max(-5.0, min(RINK_WIDTH_FT + 5.0, tent[1]))
+                    pairs.append(((float(ice_x), float(y_clamped)),
+                                  (float(px), float(py))))
         return pairs
 
-    def _match_and_sample(self, detected_lines: list, predictions: list) -> list:
-        """Match each detected line to the predicted ice-line whose
-        projected segment it sits closest to. Greedy 1-to-1 assignment;
-        the closest pairs are made first.
+    def _match_lines(self, detected_lines: list, predictions: list) -> list:
+        """Match each detected pixel-line to its closest predicted ice-line.
+
+        Returns list of (ice_x, detected_line_dict). Greedy 1-to-1; closest
+        pair (perpendicular distance) wins each round. Direction agreement
+        is required to prevent matching e.g. a horizontal blue line to a
+        vertical-projection prediction.
         """
         if not detected_lines or not predictions:
             return []
 
         def perp_distance(midpoint, seg):
-            """Perpendicular distance from a point to the line through seg."""
             mx, my = midpoint
             ax, ay = seg["top"]
             bx, by = seg["bot"]
@@ -396,7 +452,6 @@ class RinkCalibrator:
             return abs(dy * mx - dx * my + bx * ay - by * ax) / n
 
         def direction_agreement(line, seg):
-            """Cosine similarity between detected line direction and predicted."""
             sx = seg["bot"][0] - seg["top"][0]
             sy = seg["bot"][1] - seg["top"][1]
             sn = (sx * sx + sy * sy) ** 0.5
@@ -404,14 +459,11 @@ class RinkCalibrator:
                 return 0.0
             return abs((line["ux"] * sx + line["uy"] * sy) / sn)
 
-        # Score every (detected, predicted) pair: lower distance is better,
-        # and direction agreement must be reasonable (>0.5 ≈ within 60°).
         scored = []
         for li, ln in enumerate(detected_lines):
             for pi, pred in enumerate(predictions):
                 d = perp_distance(ln["mid"], pred)
-                agree = direction_agreement(ln, pred)
-                if agree < 0.5:
+                if direction_agreement(ln, pred) < 0.5:
                     continue
                 scored.append((d, li, pi, ln, pred))
         scored.sort(key=lambda t: t[0])
@@ -426,16 +478,7 @@ class RinkCalibrator:
                 continue
             used_dets.add(li)
             used_preds.add(pi)
-            ice_x = pred["ice_x"]
-            for px, py in sample_line_points(ln, self.line_samples_per_line):
-                tent_ice = self._similarity_pixel_to_ice((px, py))
-                if tent_ice is None:
-                    continue
-                # Snap x to the matched ice-line; clamp y to a reasonable
-                # rink range so wildly-off similarity y's don't poison RANSAC.
-                y_clamped = max(-5.0, min(RINK_WIDTH_FT + 5.0, tent_ice[1]))
-                ice_pt = (float(ice_x), float(y_clamped))
-                out.append((ice_pt, (float(px), float(py))))
+            out.append((pred["ice_x"], ln))
         return out
 
     def _disambiguate_faceoffs(self, faceoffs: list) -> list:
