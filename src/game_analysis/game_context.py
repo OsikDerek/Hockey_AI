@@ -55,6 +55,7 @@ class FrameContext:
     is_camera_cut: bool = False
     is_shootout_like: bool = False  # 1-on-1 vs goalie context (shooter + goalie, no defenders)
     ice_calibrated: bool = False  # True when RinkCalibrator has produced a valid pixel<->ice transform
+    ice_homography: bool = False  # True when B1 homography is active (else similarity fallback)
     team_assignments: dict = field(default_factory=dict)  # track_id -> "team_a" | "team_b"
 
 

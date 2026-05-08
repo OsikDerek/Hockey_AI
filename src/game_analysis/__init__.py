@@ -211,6 +211,7 @@ def run_game_analysis_mode(args, meta):
             is_camera_cut=is_camera_cut,
             is_shootout_like=is_shootout_like,
             ice_calibrated=rink_calibrator.is_calibrated,
+            ice_homography=rink_calibrator.has_homography,
             team_assignments=dict(team_assignments),
         )
 
@@ -517,10 +518,16 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
 
     out_of_rink_count = 0
     total_xy_count = 0
+    total_calibrated_frames = 0
+    homography_frames = 0
 
     frames_out = []
     for i, ctx in enumerate(analysis.frame_contexts):
         teams = team_data[i] if i < len(team_data) else {}
+        if ctx.ice_calibrated:
+            total_calibrated_frames += 1
+        if getattr(ctx, "ice_homography", False):
+            homography_frames += 1
 
         def _dump(obj):
             nonlocal out_of_rink_count, total_xy_count
@@ -564,6 +571,9 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
         100.0 * (1.0 - out_of_rink_count / total_xy_count)
         if total_xy_count > 0 else 0.0
     )
+    homography_pct = (
+        100.0 * homography_frames / max(total_calibrated_frames, 1)
+    )
     payload = {
         "rink": {"length_ft": RINK_LENGTH_FT, "width_ft": RINK_WIDTH_FT},
         "fps": meta.get("fps", 30.0),
@@ -571,6 +581,9 @@ def _write_positions_json(output_path: str, analysis, meta, team_data) -> None:
             "in_rink_pct": round(quality_pct, 1),
             "total_xy_count": total_xy_count,
             "out_of_rink_count": out_of_rink_count,
+            "calibrated_frames": total_calibrated_frames,
+            "homography_frames": homography_frames,
+            "homography_pct": round(homography_pct, 1),
         },
         "frames": frames_out,
     }

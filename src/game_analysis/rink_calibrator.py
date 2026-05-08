@@ -1,31 +1,39 @@
 """Pixel <-> ice coordinate calibration from detected rink landmarks.
 
-Phase B0 uses a 2D similarity transform (translation + rotation + uniform
-scale) anchored on the goal positions and centroid. Phase B0.5 stabilizes
+Phase B0 used a 2D similarity transform (translation + rotation + uniform
+scale) anchored on the goal positions and centroid. Phase B0.5 stabilized
 that transform across frames so player positions on the minimap (and the
 3D viewer in Phase C) move smoothly instead of teleporting.
 
-Stability strategies (B0.5):
-1. **EMA smoothing**: blend each new fit into the previous transform
-   instead of replacing it outright.
-2. **Outlier rejection**: drop a fit if its scale changes >50% or its
-   origin jumps >200 px from the previous transform — broadcast cameras
-   don't actually do that.
+Phase B1 adds a full 8-DoF homography on top of the similarity. The
+similarity acts as a coarse prior: once it converges, we use it to predict
+where each NHL faceoff dot should appear in pixels, then snap the YOLO
+"faceoff" detections (which are all one class — undifferentiated) to the
+nearest predicted dot. With ≥4 confident correspondences plus the goals
+and centroid we run `cv2.findHomography` (RANSAC) and EMA-blend the
+resulting matrix across frames. Homography wins for pixel<->ice transforms
+when valid; we fall back to similarity when not.
+
+Stability strategies (preserved from B0.5):
+1. **EMA smoothing** of both the similarity transform AND the homography
+   matrix elementwise.
+2. **Outlier rejection**: drop fits whose scale changes >50% or origin
+   jumps >200 px; drop homographies whose reprojection error exceeds a
+   sanity threshold or whose condition number is huge (degenerate).
 3. **Side disambiguation by prediction**: when a single goal is visible
    and we already have a previous transform, pick the goal-side guess
    whose predicted pixel position is closest to the observed goal.
-4. **Hard reset on camera cuts**: caller must invoke .reset() when
+4. **Hard reset on camera cuts**: caller invokes .reset() when
    `is_camera_cut` is true so we don't blend across angle changes.
-
-Phase B1 will upgrade to a full 8-DoF homography once we solve the
-faceoff-dot identification problem.
 
 Ice coordinates use the standard NHL convention: x in [0, 200] running
 goal-line to goal-line, y in [0, 85] running board-to-board, units feet.
 """
 
+from collections import deque
 from typing import Optional
 
+import cv2
 import numpy as np
 
 
@@ -41,25 +49,73 @@ CENTER_Y_FT = RINK_WIDTH_FT / 2.0      # 42.5
 BLUE_LINE_LEFT_X_FT = 75.0
 BLUE_LINE_RIGHT_X_FT = 125.0
 
+# NHL faceoff dot ice coordinates (8 dots — all class "faceoff" in YOLO).
+# Dots are 22 ft apart laterally (centered on y=42.5, so y=20.5 / y=64.5)
+# and 20 ft from the goal line for D-zone dots, 5 ft from blue lines for
+# neutral-zone dots.
+NHL_FACEOFF_DOTS_FT = (
+    (20.0, 20.5),    # left-D bottom
+    (20.0, 64.5),    # left-D top
+    (75.0, 20.5),    # left-N bottom
+    (75.0, 64.5),    # left-N top
+    (125.0, 20.5),   # right-N bottom
+    (125.0, 64.5),   # right-N top
+    (180.0, 20.5),   # right-D bottom
+    (180.0, 64.5),   # right-D top
+)
+
 
 class RinkCalibrator:
-    """Maintain a smoothed pixel<->ice similarity transform across frames."""
+    """Maintain a smoothed pixel<->ice transform across frames.
+
+    Holds two fits: a similarity (B0/B0.5) used as a coarse prior and a
+    homography (B1) used as the high-fidelity transform when enough
+    landmarks are visible. Public transforms prefer the homography when
+    valid and fall back to similarity otherwise.
+    """
 
     def __init__(
         self,
         ema_alpha: float = 0.15,                 # weight of new fit (0=hold, 1=replace)
-        max_scale_change: float = 0.5,           # reject fit if scale changes by >50%
-        max_origin_jump_px: float = 200.0,       # reject fit if origin moves >200 px
+        max_scale_change: float = 0.5,           # reject sim fit if scale changes by >50%
+        max_origin_jump_px: float = 200.0,       # reject sim fit if origin moves >200 px
         min_scale_px_per_ft: float = 2.0,        # plausibility floor (rink 4x frame width)
         max_scale_px_per_ft: float = 25.0,       # plausibility ceiling (rink 0.4x frame width)
+        # B1 homography params
+        homography_ema_alpha: float = 0.25,      # blend weight for new H matrix
+        homography_max_reproj_px: float = 30.0,  # reject H if any correspondence reprojects worse
+        homography_min_correspondences: int = 4, # minimum point pairs to attempt H
+        faceoff_match_max_err_px: float = 120.0, # snap-to-nearest-dot tolerance — loose
+                                                  # because the similarity prior is often
+                                                  # only approximately right on broadcast cams
+        landmark_conf_floor: float = 0.25,       # accept lower-conf rink-landmark detections
+                                                  # to feed B1; quality is checked downstream
+                                                  # via the homography's reproj-error gate
+        landmark_buffer_frames: int = 15,        # accumulate correspondences across this
+                                                  # many recent frames (~0.5s @ 30fps) since
+                                                  # the YOLO model rarely surfaces ≥4
+                                                  # landmarks in any one frame; the
+                                                  # reproj-error gate / RANSAC reject stale
+                                                  # points when the camera pans
     ):
         self.ema_alpha = ema_alpha
         self.max_scale_change = max_scale_change
         self.max_origin_jump_px = max_origin_jump_px
         self.min_scale_px_per_ft = min_scale_px_per_ft
         self.max_scale_px_per_ft = max_scale_px_per_ft
+        self.homography_ema_alpha = homography_ema_alpha
+        self.homography_max_reproj_px = homography_max_reproj_px
+        self.homography_min_correspondences = homography_min_correspondences
+        self.faceoff_match_max_err_px = faceoff_match_max_err_px
+        self.landmark_conf_floor = landmark_conf_floor
+        self.landmark_buffer_frames = landmark_buffer_frames
 
-        # Similarity transform parameters: ice (x_ft, y_ft) -> pixel (px, py)
+        # Rolling correspondence buffer for B1: each entry is
+        # (frame_count_when_seen, ice_pt, pixel_pt). Pruned to the most
+        # recent landmark_buffer_frames frames each update.
+        self._landmark_buffer: deque = deque(maxlen=landmark_buffer_frames * 16)
+
+        # Similarity transform (B0): ice (x_ft, y_ft) -> pixel (px, py)
         # px = origin_px[0] + scale * (cos*x_ft - sin*y_ft)
         # py = origin_px[1] + scale * (sin*x_ft + cos*y_ft)
         self._origin_px: Optional[np.ndarray] = None
@@ -67,11 +123,22 @@ class RinkCalibrator:
         self._cos: float = 1.0
         self._sin: float = 0.0
         self._calibrated: bool = False
+
+        # Homography transform (B1): 3x3 matrix mapping ice (x_ft, y_ft, 1)
+        # to pixel (px, py, 1). Both forward and inverse are kept hot.
+        self._homography: Optional[np.ndarray] = None
+        self._homography_inv: Optional[np.ndarray] = None
+        self._homography_correspondences: int = 0  # count from most recent fit
+
         self._frame_count: int = 0
 
     @property
     def is_calibrated(self) -> bool:
         return self._calibrated
+
+    @property
+    def has_homography(self) -> bool:
+        return self._homography is not None
 
     def reset(self) -> None:
         """Clear all calibration state — call on camera cut."""
@@ -80,6 +147,10 @@ class RinkCalibrator:
         self._cos = 1.0
         self._sin = 0.0
         self._calibrated = False
+        self._homography = None
+        self._homography_inv = None
+        self._homography_correspondences = 0
+        self._landmark_buffer.clear()
 
     def update(self, rink_landmarks: dict, frame_width: int, frame_height: int) -> None:
         """Per-frame calibration update with smoothing + outlier rejection."""
@@ -87,12 +158,18 @@ class RinkCalibrator:
 
         goals = [g for g in rink_landmarks.get("goal", []) if g.confidence >= 0.4]
         centroids = [c for c in rink_landmarks.get("centroid", []) if c.confidence >= 0.4]
+        # Faceoff dots feed the homography only; the reprojection-error gate
+        # downstream filters bad matches, so we accept lower-confidence
+        # detections here to maximize the chance of ≥4 correspondences.
+        faceoffs = [f for f in rink_landmarks.get("faceoff", [])
+                    if f.confidence >= self.landmark_conf_floor]
 
         # Reject obviously bad goal detections (the bbox aspect ratio of a
         # real net is roughly square; far-zoom misdetections are often
         # vertical slivers or thin strips).
         goals = [g for g in goals if self._goal_bbox_plausible(g)]
 
+        # ── Step 1: similarity update (B0/B0.5) ─────────────────────────
         # Side-bin goals using the previous transform if we have one;
         # otherwise fall back to frame-half.
         left_goals, right_goals = self._bin_goals_by_side(goals, frame_width)
@@ -105,27 +182,188 @@ class RinkCalibrator:
         elif goals:
             candidate = self._fit_from_single_goal(goals[0], frame_width)
 
-        if candidate is None:
-            return  # No new info this frame; hold previous transform
+        if candidate is not None:
+            cand_scale = candidate[1]
+            if not (self.min_scale_px_per_ft <= cand_scale <= self.max_scale_px_per_ft):
+                pass  # Reject implausible-size fits
+            elif self._calibrated and not self._fit_is_plausible(candidate):
+                pass  # Outlier — keep previous
+            else:
+                if not self._calibrated:
+                    self._apply_fit(candidate, alpha=1.0)
+                else:
+                    self._apply_fit(candidate, alpha=self.ema_alpha)
+                self._calibrated = True
 
-        # Plausibility floor / ceiling on the absolute scale — rejects
-        # fits that would imply an absurd rink size in the frame.
-        cand_scale = candidate[1]
-        if not (self.min_scale_px_per_ft <= cand_scale <= self.max_scale_px_per_ft):
+        # ── Step 2: homography update (B1) ──────────────────────────────
+        # The similarity must be valid first — we use it to predict where
+        # each NHL faceoff dot should appear, then snap detections to the
+        # nearest predicted dot to build correspondences.
+        if self._calibrated:
+            self._try_homography_fit(goals, centroids, faceoffs, left_goals, right_goals)
+
+    # ── B1: homography fit ──────────────────────────────────────────────
+    def _try_homography_fit(
+        self, goals: list, centroids: list, faceoffs: list,
+        left_goals: list, right_goals: list,
+    ) -> None:
+        """Build correspondences from disambiguated landmarks, fit H, blend.
+
+        Correspondences are accumulated across a short rolling buffer
+        (last ~0.5s of frames, cleared on camera cut) since the YOLO
+        model rarely shows ≥4 rink landmarks in a single frame. RANSAC
+        and the reprojection-error gate filter stale points when the
+        camera pans within the buffer window.
+        """
+        # Push this frame's correspondences into the rolling buffer.
+        if left_goals:
+            self._landmark_buffer.append(
+                (self._frame_count, (LEFT_GOAL_X_FT, CENTER_Y_FT), left_goals[0].center)
+            )
+        if right_goals:
+            self._landmark_buffer.append(
+                (self._frame_count, (RIGHT_GOAL_X_FT, CENTER_Y_FT), right_goals[0].center)
+            )
+        if centroids:
+            self._landmark_buffer.append(
+                (self._frame_count, (CENTER_X_FT, CENTER_Y_FT), centroids[0].center)
+            )
+        for ice_pt, pix_pt in self._disambiguate_faceoffs(faceoffs):
+            self._landmark_buffer.append((self._frame_count, ice_pt, pix_pt))
+
+        # Prune entries older than the buffer window.
+        cutoff = self._frame_count - self.landmark_buffer_frames
+        while self._landmark_buffer and self._landmark_buffer[0][0] < cutoff:
+            self._landmark_buffer.popleft()
+
+        # Deduplicate by ice point (keep the most-recent observation per dot,
+        # since the camera may have moved and the older pixel reading is stale).
+        latest_by_ice: dict = {}
+        for frame_n, ice_pt, pix_pt in self._landmark_buffer:
+            latest_by_ice[ice_pt] = (frame_n, pix_pt)
+
+        ice_pts = list(latest_by_ice.keys())
+        pixel_pts = [latest_by_ice[k][1] for k in ice_pts]
+
+        if len(ice_pts) < self.homography_min_correspondences:
+            return  # Not enough — keep prior homography (or stay similarity-only)
+
+        ice_arr = np.array(ice_pts, dtype=np.float64)
+        pixel_arr = np.array(pixel_pts, dtype=np.float64)
+
+        # Reject collinear / degenerate sets — needs 2D spread on both axes.
+        if (np.ptp(ice_arr[:, 0]) < 20.0) or (np.ptp(ice_arr[:, 1]) < 5.0):
             return
 
-        # Outlier rejection (only meaningful once we have a previous fit)
-        if self._calibrated and not self._fit_is_plausible(candidate):
+        H, mask = cv2.findHomography(
+            ice_arr, pixel_arr,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=self.homography_max_reproj_px,
+        )
+        if H is None or H.shape != (3, 3):
             return
 
-        # Apply the candidate. First fit replaces; subsequent fits blend via EMA.
-        if not self._calibrated:
-            self._apply_fit(candidate, alpha=1.0)
+        # Validate: reproject every (not just inliers) correspondence and
+        # measure max error. Bail on any obviously broken fit.
+        reproj = self._apply_homography(H, ice_arr)
+        errors = np.linalg.norm(reproj - pixel_arr, axis=1)
+        if float(errors.max()) > self.homography_max_reproj_px * 2:
+            return
+
+        # Sanity: forward-backward stability (H @ inv(H) should approximate I)
+        try:
+            H_inv = np.linalg.inv(H)
+        except np.linalg.LinAlgError:
+            return
+        if not np.all(np.isfinite(H_inv)):
+            return
+
+        # Normalize so H[2,2] == 1 for consistent EMA blending
+        if abs(H[2, 2]) < 1e-8:
+            return
+        H_norm = H / H[2, 2]
+
+        # EMA-blend with prior homography (or replace on first fit)
+        if self._homography is None:
+            self._homography = H_norm
         else:
-            self._apply_fit(candidate, alpha=self.ema_alpha)
-        self._calibrated = True
+            a = self.homography_ema_alpha
+            self._homography = (1.0 - a) * self._homography + a * H_norm
+            # Re-normalize after blend
+            if abs(self._homography[2, 2]) > 1e-8:
+                self._homography = self._homography / self._homography[2, 2]
 
-    # ── Fit candidates: each returns a tuple (origin_px, scale, cos, sin) ──
+        try:
+            self._homography_inv = np.linalg.inv(self._homography)
+        except np.linalg.LinAlgError:
+            self._homography_inv = None
+            self._homography = None
+            return
+        self._homography_correspondences = int(len(ice_pts))
+
+    def _disambiguate_faceoffs(self, faceoffs: list) -> list:
+        """Match each detected faceoff dot to its NHL-spec position.
+
+        Strategy: predict where each of the 8 NHL dots SHOULD appear in
+        pixel space using the current similarity transform, then for each
+        detection greedily pair it with its nearest predicted dot. Each
+        NHL dot is consumed at most once. Drop pairs whose pixel residual
+        exceeds the snap tolerance.
+
+        Returns list of (ice_pt, pixel_pt) tuples.
+        """
+        if not faceoffs or self._scale_px_per_ft is None:
+            return []
+
+        # Predict pixel position of each NHL dot.
+        predictions = []
+        for ice_pt in NHL_FACEOFF_DOTS_FT:
+            pred = self._similarity_ice_to_pixel(ice_pt)
+            if pred is not None:
+                predictions.append((ice_pt, pred))
+        if not predictions:
+            return []
+
+        # Greedy nearest-neighbor matching. Sort detections by their best
+        # match distance so the most-confident pairs are made first.
+        unmatched_dets = list(faceoffs)
+        unmatched_preds = list(predictions)
+        pairs = []
+
+        while unmatched_dets and unmatched_preds:
+            best = None  # (det_idx, pred_idx, distance)
+            for di, det in enumerate(unmatched_dets):
+                dx, dy = det.center
+                for pi, (_ice, (px, py)) in enumerate(unmatched_preds):
+                    d = (dx - px) ** 2 + (dy - py) ** 2
+                    if best is None or d < best[2]:
+                        best = (di, pi, d)
+            if best is None:
+                break
+            di, pi, d2 = best
+            d = d2 ** 0.5
+            if d > self.faceoff_match_max_err_px:
+                break  # Even the best remaining match is too far
+            ice_pt, pix_pt = unmatched_preds[pi][0], unmatched_dets[di].center
+            pairs.append((ice_pt, pix_pt))
+            unmatched_dets.pop(di)
+            unmatched_preds.pop(pi)
+
+        return pairs
+
+    @staticmethod
+    def _apply_homography(H: np.ndarray, pts: np.ndarray) -> np.ndarray:
+        """Apply 3x3 H to Nx2 pts; return Nx2."""
+        if pts.size == 0:
+            return pts
+        ones = np.ones((pts.shape[0], 1), dtype=np.float64)
+        homo = np.hstack([pts, ones])
+        out = (H @ homo.T).T
+        w = out[:, 2:3]
+        w[np.abs(w) < 1e-12] = 1e-12
+        return out[:, :2] / w
+
+    # ── Similarity fit candidates: each returns (origin_px, scale, cos, sin) ──
     def _fit_from_two_goals(self, left_goal, right_goal, centroids: list):
         left_x, left_y = left_goal.center
         right_x, right_y = right_goal.center
@@ -152,15 +390,8 @@ class RinkCalibrator:
         return (np.array([origin_x, origin_y], dtype=np.float64), float(scale), 1.0, 0.0)
 
     def _fit_from_single_goal(self, goal, frame_width: int):
-        """Single-goal observations only refine the origin, never scale.
-
-        Goal-bbox width is too noisy (varies heavily with camera zoom and
-        partial occlusion) to derive scale reliably. We only use single-goal
-        observations to track camera pan — translating the origin without
-        changing the scale that was set by a more reliable fit.
-        """
+        """Single-goal observations only refine the origin, never scale."""
         if self._scale_px_per_ft is None or not self._calibrated:
-            # No previous scale to anchor to — refuse to fit at all.
             return None
         gx, gy = goal.center
         scale = self._scale_px_per_ft
@@ -177,11 +408,8 @@ class RinkCalibrator:
             left = [g for g in goals if g.center[0] < half]
             right = [g for g in goals if g.center[0] >= half]
             return left, right
-        # Use the existing transform to predict where each goal-side SHOULD
-        # appear, then assign each detection to whichever predicted side is
-        # closer.
-        left_pred = self.ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
-        right_pred = self.ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
+        left_pred = self._similarity_ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
+        right_pred = self._similarity_ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
         left, right = [], []
         for g in goals:
             gx = g.center[0]
@@ -194,15 +422,13 @@ class RinkCalibrator:
         return left, right
 
     def _best_goal_side_guess(self, gx: float, frame_width: int) -> float:
-        """Pick LEFT_GOAL_X_FT or RIGHT_GOAL_X_FT for a single observed goal pixel."""
         if self._calibrated and self._origin_px is not None and self._scale_px_per_ft is not None:
-            left_pred = self.ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
-            right_pred = self.ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
+            left_pred = self._similarity_ice_to_pixel((LEFT_GOAL_X_FT, CENTER_Y_FT))
+            right_pred = self._similarity_ice_to_pixel((RIGHT_GOAL_X_FT, CENTER_Y_FT))
             if left_pred is not None and right_pred is not None:
                 if abs(gx - left_pred[0]) <= abs(gx - right_pred[0]):
                     return LEFT_GOAL_X_FT
                 return RIGHT_GOAL_X_FT
-        # Fallback: frame-half heuristic
         return LEFT_GOAL_X_FT if gx < frame_width / 2.0 else RIGHT_GOAL_X_FT
 
     @staticmethod
@@ -240,6 +466,26 @@ class RinkCalibrator:
 
     # ── Coordinate transforms ──
     def pixel_to_ice(self, pt) -> Optional[tuple]:
+        """Map a pixel point to ice coords. Prefers homography when valid."""
+        if self._homography_inv is not None:
+            arr = np.array([[float(pt[0]), float(pt[1])]], dtype=np.float64)
+            ice = self._apply_homography(self._homography_inv, arr)
+            if np.all(np.isfinite(ice)):
+                return (float(ice[0, 0]), float(ice[0, 1]))
+        return self._similarity_pixel_to_ice(pt)
+
+    def ice_to_pixel(self, pt) -> Optional[tuple]:
+        """Map an ice-coord point to pixels. Prefers homography when valid."""
+        if self._homography is not None:
+            arr = np.array([[float(pt[0]), float(pt[1])]], dtype=np.float64)
+            pix = self._apply_homography(self._homography, arr)
+            if np.all(np.isfinite(pix)):
+                return (float(pix[0, 0]), float(pix[0, 1]))
+        return self._similarity_ice_to_pixel(pt)
+
+    # Similarity-only transforms (used internally for predictions even when
+    # the homography has taken over the public-facing transform).
+    def _similarity_pixel_to_ice(self, pt) -> Optional[tuple]:
         if not self._calibrated or self._origin_px is None or self._scale_px_per_ft is None:
             return None
         px, py = float(pt[0]), float(pt[1])
@@ -249,7 +495,7 @@ class RinkCalibrator:
         y_ft = (-self._sin * dx + self._cos * dy) / self._scale_px_per_ft
         return (float(x_ft), float(y_ft))
 
-    def ice_to_pixel(self, pt) -> Optional[tuple]:
+    def _similarity_ice_to_pixel(self, pt) -> Optional[tuple]:
         if not self._calibrated or self._origin_px is None or self._scale_px_per_ft is None:
             return None
         x_ft, y_ft = float(pt[0]), float(pt[1])
