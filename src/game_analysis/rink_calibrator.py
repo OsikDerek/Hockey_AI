@@ -35,6 +35,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .rink_lines import detect_rink_lines, sample_line_points
+
 
 # NHL rink geometry (feet)
 RINK_LENGTH_FT = 200.0
@@ -90,6 +92,12 @@ class RinkCalibrator:
         landmark_conf_floor: float = 0.25,       # accept lower-conf rink-landmark detections
                                                   # to feed B1; quality is checked downstream
                                                   # via the homography's reproj-error gate
+        # B2: classical CV line detection
+        line_samples_per_line: int = 7,          # points sampled along each detected line
+        line_snap_tolerance_px: float = 80.0,    # max perpendicular distance from a
+                                                  # detected pixel-line to the predicted
+                                                  # projection of an ice-line for them to
+                                                  # be paired
     ):
         self.ema_alpha = ema_alpha
         self.max_scale_change = max_scale_change
@@ -101,6 +109,8 @@ class RinkCalibrator:
         self.homography_min_correspondences = homography_min_correspondences
         self.faceoff_match_max_err_px = faceoff_match_max_err_px
         self.landmark_conf_floor = landmark_conf_floor
+        self.line_samples_per_line = line_samples_per_line
+        self.line_snap_tolerance_px = line_snap_tolerance_px
 
         # Similarity transform (B0): ice (x_ft, y_ft) -> pixel (px, py)
         # px = origin_px[0] + scale * (cos*x_ft - sin*y_ft)
@@ -138,8 +148,16 @@ class RinkCalibrator:
         self._homography_inv = None
         self._homography_correspondences = 0
 
-    def update(self, rink_landmarks: dict, frame_width: int, frame_height: int) -> None:
-        """Per-frame calibration update with smoothing + outlier rejection."""
+    def update(self, rink_landmarks: dict, frame_width: int, frame_height: int,
+               frame: Optional[np.ndarray] = None) -> None:
+        """Per-frame calibration update with smoothing + outlier rejection.
+
+        When `frame` is provided AND the similarity transform has converged,
+        we additionally run B2 line detection and feed sampled points along
+        each matched ice-line into the homography fit. This is the path
+        that takes broadcast follow-cam from "rare 2-3 YOLO landmarks per
+        frame" to "5+ correspondences every frame the rink is in shot."
+        """
         self._frame_count += 1
 
         goals = [g for g in rink_landmarks.get("goal", []) if g.confidence >= 0.4]
@@ -181,17 +199,21 @@ class RinkCalibrator:
                     self._apply_fit(candidate, alpha=self.ema_alpha)
                 self._calibrated = True
 
-        # ── Step 2: homography update (B1) ──────────────────────────────
+        # ── Step 2: homography update (B1 + B2) ─────────────────────────
         # The similarity must be valid first — we use it to predict where
-        # each NHL faceoff dot should appear, then snap detections to the
-        # nearest predicted dot to build correspondences.
+        # each NHL faceoff dot AND each rink line should appear, then snap
+        # detections to the nearest predicted feature to build correspondences.
         if self._calibrated:
-            self._try_homography_fit(goals, centroids, faceoffs, left_goals, right_goals)
+            self._try_homography_fit(
+                goals, centroids, faceoffs, left_goals, right_goals,
+                frame=frame,
+            )
 
-    # ── B1: homography fit ──────────────────────────────────────────────
+    # ── B1 + B2: homography fit ─────────────────────────────────────────
     def _try_homography_fit(
         self, goals: list, centroids: list, faceoffs: list,
         left_goals: list, right_goals: list,
+        frame: Optional[np.ndarray] = None,
     ) -> None:
         """Build correspondences from THIS frame's landmarks, fit H, blend.
 
@@ -222,14 +244,32 @@ class RinkCalibrator:
             ice_pts.append(ice_pt)
             pixel_pts.append(pix_pt)
 
+        # B2: line correspondences augment YOLO point landmarks but never
+        # dominate them. Without ≥2 YOLO points, lines alone produce
+        # underconstrained / collinear correspondence sets that collapse
+        # the entire rink into a thin patch (visible as players stacking
+        # on top of each other).
+        yolo_point_count = len(ice_pts)
+        if frame is not None and yolo_point_count >= 2:
+            for ice_pt, pix_pt in self._extract_line_correspondences(frame):
+                ice_pts.append(ice_pt)
+                pixel_pts.append(pix_pt)
+
         if len(ice_pts) < self.homography_min_correspondences:
             return  # Not enough this frame — keep prior homography (or stay similarity)
 
         ice_arr = np.array(ice_pts, dtype=np.float64)
         pixel_arr = np.array(pixel_pts, dtype=np.float64)
 
-        # Reject collinear / degenerate sets — needs 2D spread on both axes.
+        # Reject collinear / degenerate sets — needs 2D spread on both axes
+        # in BOTH ice-coord AND pixel-coord space. Without the pixel-spread
+        # check, we accept correspondence sets where all samples cluster
+        # along a single line in pixel space (e.g., 7 samples along one
+        # detected blue line) → the resulting homography is grossly
+        # underconstrained and collapses the rink to that line's neighborhood.
         if (np.ptp(ice_arr[:, 0]) < 20.0) or (np.ptp(ice_arr[:, 1]) < 5.0):
+            return
+        if (np.ptp(pixel_arr[:, 0]) < 100.0) or (np.ptp(pixel_arr[:, 1]) < 60.0):
             return
 
         H, mask = cv2.findHomography(
@@ -245,6 +285,22 @@ class RinkCalibrator:
         reproj = self._apply_homography(H, ice_arr)
         errors = np.linalg.norm(reproj - pixel_arr, axis=1)
         if float(errors.max()) > self.homography_max_reproj_px * 2:
+            return
+
+        # Geometric sanity check: project the rink corners and verify the
+        # resulting quadrilateral isn't degenerate. Without this, line-only
+        # correspondences (highly correlated samples along a single line)
+        # often produce near-singular Hs that collapse the entire rink to
+        # a tiny patch — visible as "all players stacked on top of each
+        # other" in the viewer.
+        corners_ice = np.array([
+            [0.0, 0.0],
+            [RINK_LENGTH_FT, 0.0],
+            [RINK_LENGTH_FT, RINK_WIDTH_FT],
+            [0.0, RINK_WIDTH_FT],
+        ], dtype=np.float64)
+        corners_px = self._apply_homography(H, corners_ice)
+        if not self._rink_quad_is_plausible(corners_px):
             return
 
         # Sanity: forward-backward stability (H @ inv(H) should approximate I)
@@ -277,6 +333,110 @@ class RinkCalibrator:
             self._homography = None
             return
         self._homography_correspondences = int(len(ice_pts))
+
+    def _extract_line_correspondences(self, frame: np.ndarray) -> list:
+        """B2: detect rink lines, match to known ice-line x-coords, sample points.
+
+        Each accepted detected line contributes `line_samples_per_line`
+        point pairs — pixel points along the detected segment, ice points
+        on the matched ice-line at y taken from the similarity transform.
+        The homography fit refines both x and y of each pair, so the
+        y-coord from the similarity only needs to be in the right
+        neighborhood.
+
+        Matching is orientation-agnostic. Each known ice-line is projected
+        to pixels via the similarity transform as a SEGMENT (full top-to-
+        bottom span of the rink). Detected pixel lines are matched to
+        whichever predicted segment they lie closest to (perpendicular
+        midpoint distance + direction agreement).
+        """
+        if self._scale_px_per_ft is None or self._origin_px is None:
+            return []
+
+        result = detect_rink_lines(frame)
+        if not result["blue"] and not result["red"]:
+            return []
+
+        blue_x_options = [BLUE_LINE_LEFT_X_FT, BLUE_LINE_RIGHT_X_FT]
+        red_x_options = [LEFT_GOAL_X_FT, CENTER_X_FT, RIGHT_GOAL_X_FT]
+
+        def predict_segment(ice_x):
+            top = self._similarity_ice_to_pixel((ice_x, 0.0))
+            bot = self._similarity_ice_to_pixel((ice_x, RINK_WIDTH_FT))
+            if top is None or bot is None:
+                return None
+            return {"ice_x": ice_x, "top": top, "bot": bot}
+
+        blue_preds = [s for s in (predict_segment(x) for x in blue_x_options) if s]
+        red_preds = [s for s in (predict_segment(x) for x in red_x_options) if s]
+
+        pairs = []
+        pairs.extend(self._match_and_sample(result["blue"], blue_preds))
+        pairs.extend(self._match_and_sample(result["red"], red_preds))
+        return pairs
+
+    def _match_and_sample(self, detected_lines: list, predictions: list) -> list:
+        """Match each detected line to the predicted ice-line whose
+        projected segment it sits closest to. Greedy 1-to-1 assignment;
+        the closest pairs are made first.
+        """
+        if not detected_lines or not predictions:
+            return []
+
+        def perp_distance(midpoint, seg):
+            """Perpendicular distance from a point to the line through seg."""
+            mx, my = midpoint
+            ax, ay = seg["top"]
+            bx, by = seg["bot"]
+            dx = bx - ax
+            dy = by - ay
+            n = (dx * dx + dy * dy) ** 0.5
+            if n < 1e-6:
+                return abs(mx - ax) + abs(my - ay)
+            return abs(dy * mx - dx * my + bx * ay - by * ax) / n
+
+        def direction_agreement(line, seg):
+            """Cosine similarity between detected line direction and predicted."""
+            sx = seg["bot"][0] - seg["top"][0]
+            sy = seg["bot"][1] - seg["top"][1]
+            sn = (sx * sx + sy * sy) ** 0.5
+            if sn < 1e-6:
+                return 0.0
+            return abs((line["ux"] * sx + line["uy"] * sy) / sn)
+
+        # Score every (detected, predicted) pair: lower distance is better,
+        # and direction agreement must be reasonable (>0.5 ≈ within 60°).
+        scored = []
+        for li, ln in enumerate(detected_lines):
+            for pi, pred in enumerate(predictions):
+                d = perp_distance(ln["mid"], pred)
+                agree = direction_agreement(ln, pred)
+                if agree < 0.5:
+                    continue
+                scored.append((d, li, pi, ln, pred))
+        scored.sort(key=lambda t: t[0])
+
+        used_dets = set()
+        used_preds = set()
+        out = []
+        for d, li, pi, ln, pred in scored:
+            if d > self.line_snap_tolerance_px:
+                break
+            if li in used_dets or pi in used_preds:
+                continue
+            used_dets.add(li)
+            used_preds.add(pi)
+            ice_x = pred["ice_x"]
+            for px, py in sample_line_points(ln, self.line_samples_per_line):
+                tent_ice = self._similarity_pixel_to_ice((px, py))
+                if tent_ice is None:
+                    continue
+                # Snap x to the matched ice-line; clamp y to a reasonable
+                # rink range so wildly-off similarity y's don't poison RANSAC.
+                y_clamped = max(-5.0, min(RINK_WIDTH_FT + 5.0, tent_ice[1]))
+                ice_pt = (float(ice_x), float(y_clamped))
+                out.append((ice_pt, (float(px), float(py))))
+        return out
 
     def _disambiguate_faceoffs(self, faceoffs: list) -> list:
         """Match each detected faceoff dot to its NHL-spec position.
@@ -327,6 +487,45 @@ class RinkCalibrator:
             unmatched_preds.pop(pi)
 
         return pairs
+
+    @staticmethod
+    def _rink_quad_is_plausible(corners_px: np.ndarray) -> bool:
+        """Reject homographies whose rink-corner projection is degenerate.
+
+        A real rink projects to a quadrilateral with non-zero area, finite
+        coords, and reasonable aspect — even the most zoomed-in broadcast
+        view, when extrapolated to the full rink corners, projects to a
+        large quadrilateral (typically 1M+ px² since the visible portion
+        is a small piece of the full rink). The most common degenerate
+        failure mode (line-correlated correspondences) maps everything to
+        a tiny strip; the most extreme failure produces NaN/inf.
+        """
+        if corners_px.shape != (4, 2):
+            return False
+        if not np.all(np.isfinite(corners_px)):
+            return False
+        # Shoelace area in pixel space
+        x = corners_px[:, 0]
+        y = corners_px[:, 1]
+        area = 0.5 * abs(
+            x[0] * (y[1] - y[3]) + x[1] * (y[2] - y[0]) +
+            x[2] * (y[3] - y[1]) + x[3] * (y[0] - y[2])
+        )
+        # Reject obvious collapses. The "stacked players" failure mode
+        # produces extremely small areas (the whole rink mapped to a
+        # patch of a few thousand px²). Any plausible calibration has
+        # >> 100k px² of rink in pixel space.
+        if area < 100_000.0:
+            return False
+        # Aspect ratio sanity: longest side / shortest side. A real rink
+        # quad's aspect (in pixel space) shouldn't be wildly extreme.
+        sides = [
+            float(np.linalg.norm(corners_px[i] - corners_px[(i + 1) % 4]))
+            for i in range(4)
+        ]
+        if min(sides) < 1.0 or (max(sides) / max(min(sides), 1.0)) > 20.0:
+            return False
+        return True
 
     @staticmethod
     def _apply_homography(H: np.ndarray, pts: np.ndarray) -> np.ndarray:

@@ -142,9 +142,11 @@ def run_game_analysis_mode(args, meta):
         if is_camera_cut:
             rink_calibrator.reset()
 
-        # Update pixel<->ice transform from this frame's landmarks, then
-        # tag every detection with its ice (x_ft, y_ft) coords.
-        rink_calibrator.update(rink_landmarks, meta["width"], meta["height"])
+        # Update pixel<->ice transform from this frame's landmarks (B0/B1)
+        # plus rink line detection (B2), then tag every detection with its
+        # ice (x_ft, y_ft) coords.
+        rink_calibrator.update(rink_landmarks, meta["width"], meta["height"],
+                               frame=frame)
         if rink_calibrator.is_calibrated:
             for obj in objects:
                 obj.ice_xy = rink_calibrator.pixel_to_ice(obj.center)
