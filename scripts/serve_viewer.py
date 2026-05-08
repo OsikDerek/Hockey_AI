@@ -8,6 +8,7 @@ browser.
 """
 
 import http.server
+import mimetypes
 import os
 import socketserver
 import sys
@@ -17,6 +18,26 @@ from urllib.parse import quote
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PORT = 8000
+
+# Windows registry maps .js → text/plain by default; ES modules will refuse
+# to execute under that MIME type ("strict MIME type checking" per HTML
+# spec) and the script silently dies with no error event. Force the right
+# mappings before SimpleHTTPRequestHandler reads them.
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("text/css", ".css")
+
+
+class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+    """Disable caching during dev — we iterate viewer.js often and stale
+    cached copies were causing 'no errors but nothing renders' confusion."""
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
 
 def find_latest_positions_json() -> Path | None:
@@ -29,7 +50,7 @@ def find_latest_positions_json() -> Path | None:
 
 def main() -> int:
     os.chdir(PROJECT_ROOT)
-    handler = http.server.SimpleHTTPRequestHandler
+    handler = NoCacheHandler
 
     latest = find_latest_positions_json()
     if latest is not None:
