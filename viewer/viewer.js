@@ -9,6 +9,7 @@ import {
 } from "./camera.js";
 import { loadFromUrl, loadFromFile } from "./data.js";
 import { Playback } from "./playback.js";
+import { Quiz, QUIZ_OPTIONS } from "./quiz.js";
 
 // ── DOM
 const container = document.getElementById("canvas-container");
@@ -26,6 +27,14 @@ const eventTooltipEl = document.getElementById("event-tooltip");
 const eventBannerEl = document.getElementById("active-event-banner");
 const povStatusEl = document.getElementById("pov-status");
 const hudCounterEl = document.getElementById("hud-counter");
+const quizToggleBtn = document.getElementById("quiz-toggle");
+const quizScoreEl = document.getElementById("quiz-score");
+const quizOverlayEl = document.getElementById("quiz-overlay");
+const quizQuestionEl = document.getElementById("quiz-question");
+const quizChoicesEl = document.getElementById("quiz-choices");
+const quizRevealEl = document.getElementById("quiz-reveal");
+const quizRevealResultEl = document.getElementById("quiz-reveal-result");
+const quizRevealDetailEl = document.getElementById("quiz-reveal-detail");
 
 // ── Three.js scene
 const scene = new THREE.Scene();
@@ -114,6 +123,70 @@ function clearAvatars() {
 let data = null;
 let playback = null;
 
+// ── Quiz state machine (Phase D)
+const quiz = new Quiz();
+
+quiz.onPause = (event) => {
+  if (!playback) return;
+  playback.pause();
+  playBtn.textContent = "Play";
+  // Snap to POV of the actor so the user evaluates from a player's-eye view
+  if (event.player_id !== null && event.player_id !== undefined) {
+    activeCamMode = "pov";
+    camButtons.forEach((b) => b.classList.toggle("active", b.dataset.cam === "pov"));
+    const tidStr = String(event.player_id);
+    if ([...povSelect.options].some((o) => o.value === tidStr)) {
+      povSelect.value = tidStr;
+    }
+  }
+  quizQuestionEl.textContent =
+    `${event.event_type.replace(/_/g, " ").toUpperCase()} — what would you do?`;
+  quizChoicesEl.innerHTML = "";
+  const opts = QUIZ_OPTIONS[event.event_type] || [];
+  opts.forEach((opt, i) => {
+    const btn = document.createElement("button");
+    btn.className = "quiz-choice-btn";
+    const hotkey = String(i + 1);
+    btn.dataset.hotkey = hotkey;
+    btn.dataset.choice = opt;
+    btn.innerHTML = `${opt.replace(/_/g, " ").toUpperCase()}<span class="hotkey">${hotkey}</span>`;
+    btn.addEventListener("click", () => quiz.commit(opt));
+    quizChoicesEl.appendChild(btn);
+  });
+  quizOverlayEl.classList.remove("hidden");
+  quizRevealEl.classList.add("hidden");
+};
+
+quiz.onReveal = (event, result) => {
+  quizOverlayEl.classList.add("hidden");
+  quizRevealEl.classList.remove("hidden");
+  quizRevealEl.className = result.matched ? "matched" : "diverged";
+  quizRevealResultEl.textContent = result.matched
+    ? "✓ You agreed with the player"
+    : "✗ You'd have done it differently";
+  const ratingClass = `rating-${result.rating || "neutral"}`;
+  quizRevealDetailEl.innerHTML = `
+    <span class="label">Your pick:</span> <span class="actual">${result.picked.toUpperCase()}</span>
+    &nbsp;·&nbsp;
+    <span class="label">Actual:</span> <span class="actual">${result.actual.toUpperCase()}</span>
+    &nbsp;·&nbsp;
+    <span class="label">AI:</span> <span class="${ratingClass}">${(result.rating || "neutral").toUpperCase()}</span>
+  `;
+};
+
+quiz.onResume = () => {
+  quizOverlayEl.classList.add("hidden");
+  quizRevealEl.classList.add("hidden");
+  if (playback && quiz.active) {
+    playback.play();
+    playBtn.textContent = "Pause";
+  }
+};
+
+quiz.onScoreChange = (score) => {
+  quizScoreEl.textContent = `${score.matched} / ${score.total}`;
+};
+
 async function loadData(payloadOrUrl, fromFile = false) {
   try {
     data = fromFile ? await loadFromFile(payloadOrUrl) : await loadFromUrl(payloadOrUrl);
@@ -122,6 +195,11 @@ async function loadData(payloadOrUrl, fromFile = false) {
     scrubber.value = 0;
     populatePOVPicker();
     renderEventMarkers();
+    quiz.loadFromData(data);
+    quiz.deactivate();
+    quizToggleBtn.classList.remove("active");
+    quizScoreEl.classList.add("hidden");
+    quizScoreEl.textContent = "0 / 0";
     clearAvatars();
 
     // Display file name (from File obj or URL) + frames + calibration quality
@@ -402,6 +480,8 @@ function tick(nowMs) {
     }
     applyFrame(playback.currentFrame());
     updateFrameDisplay();
+    // Quiz: check if we've crossed into a pre-decision pause window
+    quiz.tick(Math.floor(playback.frameIdx), playback.playing);
   }
   renderer.render(scene, activeCamera());
   requestAnimationFrame(tick);
@@ -441,9 +521,55 @@ playBtn.addEventListener("click", () => {
 
 scrubber.addEventListener("input", (e) => {
   if (!playback) return;
-  playback.setFrame(parseInt(e.target.value));
+  const idx = parseInt(e.target.value);
+  playback.setFrame(idx);
   applyFrame(playback.currentFrame());
   updateFrameDisplay();
+  quiz.onScrubTo(idx);
+});
+
+quizToggleBtn.addEventListener("click", () => {
+  if (!data) return;
+  quiz.toggle();
+  if (quiz.active) {
+    quizToggleBtn.classList.add("active");
+    quizScoreEl.classList.remove("hidden");
+    if (playback && !playback.playing) {
+      playback.play();
+      playBtn.textContent = "Pause";
+    }
+  } else {
+    quizToggleBtn.classList.remove("active");
+    quizScoreEl.classList.add("hidden");
+    quizOverlayEl.classList.add("hidden");
+    quizRevealEl.classList.add("hidden");
+  }
+});
+
+// Keyboard shortcuts: 1-4 commit a quiz choice; Esc skips the current
+// question; Space toggles play/pause (out of quiz only).
+window.addEventListener("keydown", (e) => {
+  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) return;
+  if (quiz.active && quiz.phase === "paused") {
+    if (e.key === "Escape") {
+      quiz.skip();
+      return;
+    }
+    const num = parseInt(e.key);
+    if (!isNaN(num) && num >= 1 && num <= 9) {
+      const btn = quizChoicesEl.querySelector(`[data-hotkey="${num}"]`);
+      if (btn) {
+        const choice = btn.dataset.choice;
+        quiz.commit(choice);
+      }
+    }
+    return;
+  }
+  if (e.key === " " && playback) {
+    e.preventDefault();
+    playback.togglePlay();
+    playBtn.textContent = playback.playing ? "Pause" : "Play";
+  }
 });
 
 speedSelect.addEventListener("change", (e) => {

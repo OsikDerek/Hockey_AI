@@ -16,10 +16,12 @@
       <select id="pov-player" disabled>
         <option value="">Pick player...</option>
       </select>
+      <button id="quiz-toggle" class="quiz-btn">Quiz Mode</button>
     </div>
     <div class="data-info">
       <input type="file" id="file-picker" accept=".json" />
       <span id="data-status">No data loaded</span>
+      <span id="quiz-score" class="hidden">0 / 0</span>
     </div>
   </div>
 
@@ -42,6 +44,20 @@
   <div id="active-event-banner" class="hidden"></div>
   <div id="pov-status" class="hidden">POV target off-screen</div>
   <div id="hud-counter">— / — visible</div>
+
+  <!-- Quiz overlay: shown while playback is paused at a decision moment.
+       The viewer fills #quiz-question + #quiz-choices when quiz.onPause fires. -->
+  <div id="quiz-overlay" class="hidden">
+    <div id="quiz-question">What would you do?</div>
+    <div id="quiz-choices"></div>
+    <div id="quiz-hint">Pick by click or hotkey · Esc to skip</div>
+  </div>
+
+  <!-- Reveal panel: shown briefly after the user commits a choice. -->
+  <div id="quiz-reveal" class="hidden">
+    <div id="quiz-reveal-result"></div>
+    <div id="quiz-reveal-detail"></div>
+  </div>
 
   <!-- Surface JS errors visibly on the page; runs before the module loads
        so that even a parse error in viewer.js shows up in #data-status. -->
