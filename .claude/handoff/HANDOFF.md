@@ -15,10 +15,19 @@ directory or in the repo's git history.
 4. The viewer at `viewer/` is the current frontier. Phase B1 (full
    homography) is the most likely next batch.
 
-## Where we are (as of commit `cbbe4a9` — May 2026 session)
+## Where we are (as of commit `fc64fe4` — May 2026 session)
 
 This session's batches (top = most recent):
 
+- **Position smoothing + Player-POV toggle in Quiz Mode** (`fc64fe4`):
+  per-track EMA (alpha=0.30) over chronological ice_xy observations
+  removes ±5 ft frame-to-frame jitter (16,675 obs smoothed on
+  livebarn_cropped). Avatars now glide instead of twitching — critical
+  for the new POV view. **Quiz Mode now has a Top-Down ↔ Player POV
+  toggle** (buttons in the choice overlay or V hotkey). Top-down for
+  tactical pattern-reading; POV for the end-goal experience: see what
+  the carrier saw, decide what you'd have done, then reveal what they
+  actually did + the AI's evaluation. Both views share the actor halo.
 - **Track-ID stitching** (`cbbe4a9`): post-process JSON merges ByteTrack ghost
   IDs (252 → 79 unique tracks on livebarn_cropped). Three passes: within-frame
   dedup (drop double-detections within 4 ft), temporal stitching (merge tracks
@@ -176,22 +185,25 @@ on the new machine and let it write the memory files itself.
 
 **Avatar placement accuracy** is the active frontier. Derek is doing
 side-by-side comparison of rendered top-down vs the actual LiveBarn
-film. Track-ID stitching landed (`cbbe4a9`); next investigations:
+film. Stitching + smoothing landed (`cbbe4a9`, `fc64fe4`); next
+investigations:
 
-1. **Per-track position smoothing** — even within one stable track,
-   ice_xy can jitter ±5 ft frame to frame. Kalman or simple EMA
-   per-track would smooth without losing real movement.
-2. **Spatial team-classification refinement** — on livebarn_cropped
+1. **Spatial team-classification refinement** — on livebarn_cropped
    the gray-vs-gray clusters are ambiguous (junior teams often wear
    similar colors). Could augment with per-cluster centroid
    stability checks.
-3. **Custom HockeyAI retrain on cropped junior footage** — the SHL
+2. **Custom HockeyAI retrain on cropped junior footage** — the SHL
    specialist didn't generalize, but a small training set from the
    user's own clips might.
+3. **POV camera refinement** — current POV is at avatar.position
+   looking along velocity yaw. Could improve: head height tuning,
+   stick-on-ice perspective, smoother yaw transitions, "look at the
+   puck" alternative aim (vs velocity-direction aim).
 
 **Phase D simulator (full version)**: branching playback ("if you'd
 passed instead, here's how the play would have ended"), WebXR/VR view,
-multi-shift comparison. Quiz framework already shipped (`ecd461d`+).
+multi-shift comparison. Quiz framework + POV view shipped
+(`ecd461d` + `fc64fe4`); next layer is alternative-outcome rendering.
 
 ## Things NOT to do
 
