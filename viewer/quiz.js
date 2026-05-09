@@ -54,43 +54,41 @@ export class Quiz {
     // to form a coachable scene. Without this, the quiz fires prompts
     // pointing at empty rinks.
     const frames = data.frames || [];
-    // Per-track last-calibrated-frame map, built once in a forward sweep.
+    // Per-track last-calibrated-frame map (for actor-recency check) plus
+    // a per-frame detection-count array (for scene-density check).
+    // Detection count is more robust than unique-track count once tracks
+    // have been stitched — stitching collapses ghosts so unique-id count
+    // drops, but the actual on-ice detection density is unchanged.
     const lastCalibFrame = new Map();   // track_id -> last frame_idx
-    let lastFrameAnyPlayers = -1;
-    let recentPlayerCount = new Map();  // frame_idx -> distinct active tracks
+    const detectionsPerFrame = new Array(frames.length).fill(0);
     for (let i = 0; i < frames.length; i++) {
       const fr = frames[i];
       if (!fr.calibrated) continue;
-      lastFrameAnyPlayers = i;
-      const seen = new Set();
-      for (const p of fr.players || []) {
+      const players = fr.players || [];
+      const goalies = fr.goalies || [];
+      detectionsPerFrame[i] = players.length + goalies.length;
+      for (const p of players) {
         if (p.track_id !== undefined && p.track_id >= 0) {
           lastCalibFrame.set(p.track_id, i);
-          seen.add(p.track_id);
         }
       }
-      for (const g of fr.goalies || []) {
+      for (const g of goalies) {
         if (g.track_id !== undefined && g.track_id >= 0) {
           lastCalibFrame.set(g.track_id, i);
-          seen.add(g.track_id);
         }
       }
-      recentPlayerCount.set(i, seen.size);
     }
 
-    // Renderable threshold: actor must have a calibrated position within
-    // RECENCY_FRAMES of the event, AND there must be ≥4 distinct tracks
-    // with recent positions for the scene to read as hockey.
     const RECENCY_FRAMES = 90;  // ~3 sec @ 30fps
-    const fps = data.fps || 30;
 
-    function recentTrackCount(eventIdx) {
-      let count = 0;
-      const cutoff = eventIdx - RECENCY_FRAMES;
-      for (const [tid, lastI] of lastCalibFrame) {
-        if (lastI >= cutoff && lastI <= eventIdx) count++;
+    function maxDetectionsInWindow(eventIdx) {
+      const lo = Math.max(0, eventIdx - RECENCY_FRAMES);
+      const hi = Math.min(detectionsPerFrame.length - 1, eventIdx);
+      let best = 0;
+      for (let i = lo; i <= hi; i++) {
+        if (detectionsPerFrame[i] > best) best = detectionsPerFrame[i];
       }
-      return count;
+      return best;
     }
 
     this._eligibleEvents = data.events
@@ -100,7 +98,7 @@ export class Quiz {
         const lastSeen = lastCalibFrame.get(e.player_id);
         if (lastSeen === undefined) return false;
         if (e.frame_idx - lastSeen > RECENCY_FRAMES) return false;
-        if (recentTrackCount(e.frame_idx) < 4) return false;
+        if (maxDetectionsInWindow(e.frame_idx) < 4) return false;
         return true;
       })
       .sort((a, b) => a.frame_idx - b.frame_idx);

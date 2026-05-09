@@ -647,6 +647,32 @@ def _write_positions_json(output_path: str, analysis, meta, team_data,
         "events": events_out,
         "frames": frames_out,
     }
+    # Track-ID stitching: ByteTrack assigns ~17 ghost IDs per real player
+    # on hockey footage. Post-process the JSON to merge tracks that
+    # "die" and are reborn nearby in time + space, and dedup near-
+    # coincident detections within single frames. Best-effort — never
+    # fail the whole pipeline if stitching crashes.
+    try:
+        # scripts/ isn't a package; load by file path so the pipeline
+        # works regardless of how it's invoked.
+        import importlib.util
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "..", "scripts")
+        scripts_dir = os.path.abspath(scripts_dir)
+        spec = importlib.util.spec_from_file_location(
+            "stitch_tracks_mod",
+            os.path.join(scripts_dir, "stitch_tracks.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.stitch(payload, max_gap=90, max_dist=15.0, min_track_frames=0)
+        s = payload.get("track_stitching") or {}
+        print(f"  Track stitching: {s.get('input_track_count')} -> "
+              f"{s.get('surviving_tracks')} tracks, "
+              f"{s.get('merges_applied')} merges, "
+              f"{s.get('intra_frame_dropped')} intra-frame duplicates dropped")
+    except Exception as e:
+        print(f"  Track stitching skipped: {e}")
+
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
     print(f"  Positions JSON: {json_path} (in-rink: {quality_pct:.1f}%)")
