@@ -6,14 +6,18 @@ directory or in the repo's git history.
 
 ## TL;DR for the next Claude session
 
-1. Read `.claude/handoff/memory/` — these are persistent memories about
+1. **If you're the `continue-implementation` cron routine (no user
+   prompt), open `.claude/handoff/NEXT.md` first.** That file is the
+   queued task list — pick the top autonomous-safe item, ship it,
+   delete it from NEXT.md, commit + push.
+2. Read `.claude/handoff/memory/` — these are persistent memories about
    the user (Derek Osik, pro hockey player + skating coach), the project,
    and his collaboration preferences.
-2. Read `.claude/handoff/plan.md` — the most recent plan (top of the file
+3. Read `.claude/handoff/plan.md` — the most recent plan (top of the file
    is the most recent batch; older plans retained underneath for history).
-3. Run `git log --oneline -20` to see the last ~6 batches of work.
-4. The viewer at `viewer/` is the current frontier. Phase B1 (full
-   homography) is the most likely next batch.
+4. Run `git log --oneline -20` to see the last ~6 batches of work.
+5. The viewer at `viewer/` is the current frontier. Avatar-placement
+   accuracy is the active focus.
 
 ## Where we are (as of commit `fc64fe4` — May 2026 session)
 
