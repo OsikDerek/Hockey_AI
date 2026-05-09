@@ -51,6 +51,31 @@ export function updatePOVCamera(cam, avatar) {
   cam.lookAt(tx, headHeight - 1.0, tz);
 }
 
+// Update the Decision Cam — third-person "behind the actor" view used
+// in Quiz Mode. Frames the actor + the play context (typically the
+// offensive zone they're skating toward), so the user can read the
+// situation as if they were the actor's coach. Standard sports-broadcast
+// quarterback-cam framing.
+export function updateDecisionCamera(cam, avatar, ricnk) {
+  if (!avatar) return;
+  const yaw = avatar.userData.yaw ?? 0;
+  // Camera sits 14 ft behind the actor at 9 ft up, looking 25 ft ahead.
+  const behindFt = 14;
+  const heightFt = 9;
+  const lookAheadFt = 25;
+  const cx = avatar.position.x - Math.sin(yaw) * behindFt;
+  const cz = avatar.position.z - Math.cos(yaw) * behindFt;
+  cam.position.set(cx, heightFt, cz);
+  const tx = avatar.position.x + Math.sin(yaw) * lookAheadFt;
+  const tz = avatar.position.z + Math.cos(yaw) * lookAheadFt;
+  cam.lookAt(tx, 3.0, tz);
+}
+
+export function makeDecisionCamera(aspect) {
+  // Wider FOV than POV so the user sees the whole play
+  return new THREE.PerspectiveCamera(70, aspect, 0.1, 1000);
+}
+
 export function resizeCamera(cam, w, h) {
   if (cam.isOrthographicCamera) {
     const aspect = w / h;

@@ -5,7 +5,7 @@ import { buildRink, RINK_LENGTH_FT, RINK_WIDTH_FT, CENTER_X, CENTER_Y } from "./
 import { createAvatar, updateAvatar, createPuck } from "./avatar.js";
 import {
   makeTopDownCamera, makeBroadcastCamera, makePOVCamera,
-  updatePOVCamera, resizeCamera,
+  makeDecisionCamera, updatePOVCamera, updateDecisionCamera, resizeCamera,
 } from "./camera.js";
 import { loadFromUrl, loadFromFile } from "./data.js";
 import { Playback } from "./playback.js";
@@ -98,12 +98,30 @@ function buildCameras() {
     topdown: makeTopDownCamera(w / h),
     broadcast: makeBroadcastCamera(w / h),
     pov: makePOVCamera(w / h),
+    decision: makeDecisionCamera(w / h),
   };
 }
 buildCameras();
 
 // ── Avatar registry
 const avatars = new Map(); // track_id -> { mesh, lastPos, lastFrameIdx }
+
+// Yellow halo ring placed under the quiz actor's avatar so the user
+// can spot them at a glance. Positioned each frame in activeCamera().
+const actorHalo = (() => {
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(2.4, 3.0, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0xffe54a, side: THREE.DoubleSide,
+      transparent: true, opacity: 0.85,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  ring.visible = false;
+  return ring;
+})();
+scene.add(actorHalo);
 
 function getOrCreateAvatar(trackId, team, isGoalie = false) {
   if (avatars.has(trackId)) return avatars.get(trackId);
@@ -130,15 +148,9 @@ quiz.onPause = (event) => {
   if (!playback) return;
   playback.pause();
   playBtn.textContent = "Play";
-  // Snap to POV of the actor so the user evaluates from a player's-eye view
-  if (event.player_id !== null && event.player_id !== undefined) {
-    activeCamMode = "pov";
-    camButtons.forEach((b) => b.classList.toggle("active", b.dataset.cam === "pov"));
-    const tidStr = String(event.player_id);
-    if ([...povSelect.options].some((o) => o.value === tidStr)) {
-      povSelect.value = tidStr;
-    }
-  }
+  // Camera switch is handled inside activeCamera() — it sees
+  // quiz.phase === "paused" and uses the Decision Cam (third-person
+  // behind the actor) instead of literal head-of-actor POV.
   quizQuestionEl.textContent =
     `${event.event_type.replace(/_/g, " ").toUpperCase()} — what would you do?`;
   quizChoicesEl.innerHTML = "";
@@ -442,14 +454,34 @@ function updateActiveEventOverlays(frameIdx) {
 }
 
 function activeCamera() {
+  // Quiz takes priority: while paused on a decision, use the Decision
+  // Cam (third-person behind the actor) so the user sees the actor +
+  // play context, not staring through the actor's eyes at the boards.
+  // Falls back to broadcast cam when the actor avatar can't be located.
+  if (quiz.active && quiz.phase === "paused" && quiz.currentEvent) {
+    const tid = quiz.currentEvent.player_id;
+    const entry = (tid !== null && tid !== undefined) ? avatars.get(tid) : null;
+    if (entry && entry.mesh.visible) {
+      updateDecisionCamera(cameras.decision, entry.mesh);
+      // Pin the actor halo to the avatar's foot
+      actorHalo.position.set(entry.mesh.position.x, 0.06, entry.mesh.position.z);
+      actorHalo.visible = true;
+      povStatusEl.classList.add("hidden");
+      return cameras.decision;
+    }
+    // Actor has no current avatar — fall back to broadcast so the user
+    // at least sees the rink while reading the event banner.
+    actorHalo.visible = false;
+    povStatusEl.classList.toggle("hidden", false);
+    return cameras.broadcast;
+  }
+  actorHalo.visible = false;
+
   if (activeCamMode === "pov") {
     const tid = parseInt(povSelect.value);
     const entry = isNaN(tid) ? null : avatars.get(tid);
     const isLive = entry && entry.mesh.visible;
     if (isLive) updatePOVCamera(cameras.pov, entry.mesh);
-    // POV target hint when the picked player isn't currently rendered.
-    // We intentionally keep the carrier's own avatar visible so future
-    // animations of their hands / stick can render in the POV view.
     if (!isNaN(tid)) {
       povStatusEl.classList.toggle("hidden", isLive || !povSelect.value);
     } else {
@@ -510,6 +542,7 @@ function resize() {
     resizeCamera(cameras.topdown, w, h);
     resizeCamera(cameras.broadcast, w, h);
     resizeCamera(cameras.pov, w, h);
+    resizeCamera(cameras.decision, w, h);
   }
 }
 window.addEventListener("resize", resize);
