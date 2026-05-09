@@ -465,23 +465,38 @@ function activeCamera() {
 function tick(nowMs) {
   if (playback) {
     playback.tick(nowMs);
-    // Auto-skip uncalibrated gaps during playback so the user doesn't
-    // stare at empty ice for stretches where the model lost the rink.
-    // Only kicks in while playing — manual scrubbing still lands wherever
-    // the user dragged to (with a visible "no positions" hint).
-    if (playback.playing && data) {
-      const idx = Math.floor(playback.frameIdx);
+    const idx = Math.floor(playback.frameIdx);
+
+    // Quiz check FIRST so the auto-skip below doesn't leap over an
+    // event that's sitting in an uncalibrated stretch. On the rush /
+    // 1v1 clips, ~80% of frames are uncalibrated and most events
+    // happen there — without this ordering, auto-skip jumped from
+    // (event - 100) to (event + 200) in one step and the trigger
+    // window check never fired.
+    quiz.tick(idx, playback.playing);
+
+    // Auto-skip uncalibrated gaps during playback — but only when
+    // quiz isn't currently paused at a decision moment AND the
+    // upcoming gap doesn't contain an unconsumed quiz event.
+    if (playback.playing && data && quiz.phase === "idle") {
       const fr = data.frameAt(idx);
       if (fr && !fr.calibrated) {
         const next = data.nextCalibratedFrom(idx);
-        if (next > idx) playback.setFrame(next);
-        else if (next < 0) playback.pause();
+        if (next > idx) {
+          // If there's a pending quiz event between idx and next,
+          // clamp the skip so we don't jump past it.
+          const clampTarget = quiz.active
+            ? quiz.firstUnconsumedTriggerInRange(idx, next - 1) ?? next
+            : next;
+          playback.setFrame(clampTarget);
+        } else if (next < 0) {
+          playback.pause();
+        }
       }
     }
+
     applyFrame(playback.currentFrame());
     updateFrameDisplay();
-    // Quiz: check if we've crossed into a pre-decision pause window
-    quiz.tick(Math.floor(playback.frameIdx), playback.playing);
   }
   renderer.render(scene, activeCamera());
   requestAnimationFrame(tick);

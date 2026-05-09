@@ -142,6 +142,22 @@ export class Quiz {
     if (this.onResume) this.onResume();
   }
 
+  /** Return the lowest trigger frame for an unconsumed quiz event in
+   *  [fromFrame, toFrame], or null if none. Used by the viewer's
+   *  auto-skip-uncalibrated logic to clamp the skip and not leap past
+   *  a quiz event sitting in an uncalibrated gap. */
+  firstUnconsumedTriggerInRange(fromFrame, toFrame) {
+    let best = null;
+    for (const ev of this._eligibleEvents) {
+      if (this._consumedEventIdxs.has(ev.frame_idx)) continue;
+      const trigger = ev.frame_idx - PAUSE_LEAD_FRAMES;
+      if (trigger >= fromFrame && trigger <= toFrame) {
+        if (best === null || trigger < best) best = trigger;
+      }
+    }
+    return best;
+  }
+
   /** Reset quiz progress when the user scrubs backward. We only re-prompt
    *  for events the user crossed back over. */
   onScrubTo(frameIdx) {
