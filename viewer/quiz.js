@@ -216,16 +216,24 @@ export class Quiz {
     return { matched: this.score.matched, total: this.score.total, breakdown };
   }
 
-  /** Fire onComplete the first time we cross past the last eligible
-   *  event with at least one committed choice. Idempotent. */
+  /** Fire onComplete when EITHER (a) the user has answered every
+   *  eligible event and the reveal phase has settled, OR (b) playback
+   *  has crossed past the last event by 30+ frames with at least one
+   *  committed answer. Idempotent — fires at most once per session. */
   maybeComplete(currentFrameIdx) {
     if (!this.active || this._completedFired) return;
     if (this._eligibleEvents.length === 0) return;
+
+    const allAnswered = this.score.total >= this._eligibleEvents.length;
     const last = this._eligibleEvents[this._eligibleEvents.length - 1];
-    // Trigger when we've passed all eligible events AND user committed
-    // to at least one (avoids firing on a clip the user just toggled
-    // quiz on at the very end).
-    if (currentFrameIdx > last.frame_idx + 30 && this.score.total > 0) {
+    const passedAll =
+      currentFrameIdx > last.frame_idx + 30 && this.score.total > 0;
+
+    // For the all-answered path we only fire after the current question's
+    // reveal has finished playing out (phase === "idle"); otherwise the
+    // scorecard would pop up over the last reveal. The passed-all path
+    // covers the "user scrubbed past unanswered events" case.
+    if ((allAnswered && this.phase === "idle") || passedAll) {
       this._completedFired = true;
       if (this.onComplete) this.onComplete(this.summary());
     }
