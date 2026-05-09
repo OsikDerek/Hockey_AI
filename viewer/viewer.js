@@ -445,9 +445,31 @@ function applyFrame(fr) {
   for (const e of avatars.values()) if (e.mesh.visible) visibleN++;
   hudCounterEl.textContent = `${visibleN} avatars · ${rawN} this frame · ${avatars.size} total tracks`;
 
+  // Single-puck policy:
+  //   1. tracked puck position if available (~90% of frames on cropped clips)
+  //   2. else, if a quiz event is active and the carrier's avatar is on
+  //      screen, snap to that carrier's stick-blade tip (world-space)
+  //   3. else, hide the puck. There is exactly ONE puck mesh — the player
+  //      blades themselves were also restyled so they don't read as pucks.
   if (fr.puck) {
     puck.visible = true;
     puck.position.set(fr.puck.ice_x, 0.15, fr.puck.ice_y);
+  } else {
+    let snapped = false;
+    if (quiz.active && quiz.currentEvent && quiz.currentEvent.player_id != null) {
+      const carrierEntry = avatars.get(quiz.currentEvent.player_id);
+      if (carrierEntry && carrierEntry.mesh.visible) {
+        const blade = carrierEntry.mesh.userData.stickBlade;
+        if (blade) {
+          const wp = new THREE.Vector3();
+          blade.getWorldPosition(wp);
+          puck.position.set(wp.x, 0.15, wp.z);
+          puck.visible = true;
+          snapped = true;
+        }
+      }
+    }
+    if (!snapped) puck.visible = false;
   }
 
   updateActiveEventOverlays(currentFrameIdx);

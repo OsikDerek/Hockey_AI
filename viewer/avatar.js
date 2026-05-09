@@ -10,7 +10,9 @@ const TEAM_COLORS = {
 
 const SKIN_COLOR = 0xe2bfa1;
 const STICK_COLOR = 0x6a4220;
-const BLADE_COLOR = 0x121212;
+// Blade was 0x121212 (near-black) — read as a puck on every player from
+// top-down. Mid-tone tape-gray + heel/toe shape now reads as "stick blade".
+const BLADE_COLOR = 0x4a5560;
 
 export function createAvatar(team, isGoalie = false) {
   const color = TEAM_COLORS[team] || TEAM_COLORS.unknown;
@@ -105,13 +107,19 @@ export function createAvatar(team, isGoalie = false) {
     shaft.rotation.y = -Math.PI / 12;
     shaft.position.set(2.0, 0.4, 0.4);
     stick.add(shaft);
+    // Slim, slightly-raised, slightly-yawed blade. Old shape (1.2 × 0.2 × 0.4
+    // flat at y=0.05) read as a puck on every player from top-down.
     const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 0.2, 0.4),
-      new THREE.MeshStandardMaterial({ color: BLADE_COLOR }),
+      new THREE.BoxGeometry(1.4, 0.08, 0.18),
+      new THREE.MeshStandardMaterial({ color: BLADE_COLOR, roughness: 0.7 }),
     );
-    blade.position.set(4.5, 0.05, 0.5);
+    blade.position.set(4.6, 0.18, 0.55);
+    blade.rotation.y = -Math.PI / 16; // slight toe-out so it reads as a blade
+    blade.name = "stickBlade";
     stick.add(blade);
     root.add(stick);
+    // Stash a reference for puck-snap lookup.
+    root.userData.stickBlade = blade;
   } else {
     // Goalie pad/glove rough cue: a wider, lower colored block in front
     const pad = new THREE.Mesh(
@@ -172,10 +180,25 @@ function wrapAngle(a) {
 }
 
 export function createPuck() {
-  const puck = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.5, 0.5, 0.25, 16),
-    new THREE.MeshStandardMaterial({ color: 0x111111 }),
+  // Group: puck disc + bright outline ring so the one-and-only puck is
+  // instantly distinguishable from each player's stick blade at any zoom.
+  const group = new THREE.Group();
+  const disc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5, 0.5, 0.25, 20),
+    new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.45 }),
   );
-  puck.castShadow = true;
-  return puck;
+  disc.castShadow = true;
+  group.add(disc);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.85, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb347, side: THREE.DoubleSide,
+      transparent: true, opacity: 0.9,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.13; // just above the disc top
+  group.add(ring);
+  group.userData.ring = ring;
+  return group;
 }
