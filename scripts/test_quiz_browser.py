@@ -112,7 +112,36 @@ def main(argv):
         if not score_visible:
             summary["errors"].append("Quiz Mode toggle didn't reveal score widget")
 
-        # 3. Hit Play; wait up to 30s for the first quiz overlay to appear.
+        # 3. Hit Play. Bump playback speed AND scrub close to the first
+        # renderable event (sits at frame 367 on rush) so we don't wait
+        # through 12 real-time seconds of playback during the test.
+        page.select_option("#speed", "2")
+        # Find the lowest event-marker offset and scrub the scrubber to
+        # ~30 frames before it via direct value set + input event.
+        first_marker_left = page.evaluate("""
+          () => {
+            const m = document.querySelectorAll('#event-markers .event-marker');
+            if (!m.length) return null;
+            let best = null;
+            for (const el of m) {
+              const pct = parseFloat(el.style.left);
+              if (best === null || pct < best) best = pct;
+            }
+            return best;
+          }
+        """)
+        if first_marker_left is not None:
+            scrub_pct = max(0, first_marker_left - 4)
+            page.evaluate(f"""
+              () => {{
+                const sc = document.getElementById('scrubber');
+                const max = parseInt(sc.max);
+                const target = Math.floor(max * {scrub_pct / 100.0});
+                sc.value = target;
+                sc.dispatchEvent(new Event('input', {{bubbles: true}}));
+              }}
+            """)
+            page.wait_for_timeout(300)
         page.click("#play-btn")
         first_overlay = False
         try:

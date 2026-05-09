@@ -39,6 +39,7 @@ export class Quiz {
     this.onReveal = null;    // (event, result) => void
     this.onResume = null;    // () => void  — viewer hides quiz UI, resumes playback
     this.onScoreChange = null;
+    this.onComplete = null;  // (summary) => void  — fired when end of clip reached
   }
 
   loadFromData(data) {
@@ -122,6 +123,7 @@ export class Quiz {
     this._consumedEventIdxs.clear();
     this.choices.clear();
     this.score = { matched: 0, total: 0 };
+    this._completedFired = false;
     if (this.onScoreChange) this.onScoreChange(this.score);
   }
 
@@ -201,6 +203,32 @@ export class Quiz {
     this.currentEvent = null;
     this.phase = "idle";
     if (this.onResume) this.onResume();
+  }
+
+  /** Build the end-of-clip summary used by the scorecard. Returns
+   *  { matched, total, breakdown: [{event, result}, ...] }. */
+  summary() {
+    const breakdown = [];
+    for (const ev of this._eligibleEvents) {
+      const r = this.choices.get(ev.frame_idx);
+      if (r) breakdown.push({ event: ev, result: r });
+    }
+    return { matched: this.score.matched, total: this.score.total, breakdown };
+  }
+
+  /** Fire onComplete the first time we cross past the last eligible
+   *  event with at least one committed choice. Idempotent. */
+  maybeComplete(currentFrameIdx) {
+    if (!this.active || this._completedFired) return;
+    if (this._eligibleEvents.length === 0) return;
+    const last = this._eligibleEvents[this._eligibleEvents.length - 1];
+    // Trigger when we've passed all eligible events AND user committed
+    // to at least one (avoids firing on a clip the user just toggled
+    // quiz on at the very end).
+    if (currentFrameIdx > last.frame_idx + 30 && this.score.total > 0) {
+      this._completedFired = true;
+      if (this.onComplete) this.onComplete(this.summary());
+    }
   }
 
   /** Return the lowest trigger frame for an unconsumed quiz event in

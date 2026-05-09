@@ -35,6 +35,12 @@ const quizChoicesEl = document.getElementById("quiz-choices");
 const quizRevealEl = document.getElementById("quiz-reveal");
 const quizRevealResultEl = document.getElementById("quiz-reveal-result");
 const quizRevealDetailEl = document.getElementById("quiz-reveal-detail");
+const quizReplayBtn = document.getElementById("quiz-replay-btn");
+const quizScorecardEl = document.getElementById("quiz-scorecard");
+const quizScorecardScoreEl = document.getElementById("quiz-scorecard-score");
+const quizScorecardBreakdownEl = document.getElementById("quiz-scorecard-breakdown");
+const quizScorecardRestartBtn = document.getElementById("quiz-scorecard-restart");
+const quizScorecardCloseBtn = document.getElementById("quiz-scorecard-close");
 
 // ── Three.js scene
 const scene = new THREE.Scene();
@@ -148,9 +154,9 @@ quiz.onPause = (event) => {
   if (!playback) return;
   playback.pause();
   playBtn.textContent = "Play";
+  document.body.classList.add("quiz-paused");
   // Camera switch is handled inside activeCamera() — it sees
-  // quiz.phase === "paused" and uses the Decision Cam (third-person
-  // behind the actor) instead of literal head-of-actor POV.
+  // quiz.phase === "paused" and uses top-down (coach's-tape view).
   quizQuestionEl.textContent =
     `${event.event_type.replace(/_/g, " ").toUpperCase()} — what would you do?`;
   quizChoicesEl.innerHTML = "";
@@ -189,6 +195,7 @@ quiz.onReveal = (event, result) => {
 quiz.onResume = () => {
   quizOverlayEl.classList.add("hidden");
   quizRevealEl.classList.add("hidden");
+  document.body.classList.remove("quiz-paused");
   if (playback && quiz.active) {
     playback.play();
     playBtn.textContent = "Pause";
@@ -197,6 +204,34 @@ quiz.onResume = () => {
 
 quiz.onScoreChange = (score) => {
   quizScoreEl.textContent = `${score.matched} / ${score.total}`;
+};
+
+quiz.onComplete = (summary) => {
+  // End-of-clip scorecard
+  if (playback) {
+    playback.pause();
+    playBtn.textContent = "Play";
+  }
+  quizOverlayEl.classList.add("hidden");
+  quizRevealEl.classList.add("hidden");
+  quizScorecardScoreEl.textContent = `${summary.matched} / ${summary.total}`;
+  quizScorecardBreakdownEl.innerHTML = "";
+  for (const item of summary.breakdown) {
+    const row = document.createElement("div");
+    row.className = "row " + (item.result.matched ? "matched" : "diverged");
+    const left = document.createElement("span");
+    left.textContent =
+      `${item.event.event_type.replace(/_/g, " ")} @ ${item.event.timestamp_sec.toFixed(1)}s`;
+    const right = document.createElement("span");
+    const pickActual = item.result.matched
+      ? `✓ ${item.result.picked.toUpperCase()}`
+      : `✗ ${item.result.picked.toUpperCase()} (actual: ${item.result.actual.toUpperCase()})`;
+    right.textContent = pickActual;
+    row.appendChild(left);
+    row.appendChild(right);
+    quizScorecardBreakdownEl.appendChild(row);
+  }
+  quizScorecardEl.classList.remove("hidden");
 };
 
 async function loadData(payloadOrUrl, fromFile = false) {
@@ -507,6 +542,8 @@ function tick(nowMs) {
     // (event - 100) to (event + 200) in one step and the trigger
     // window check never fired.
     quiz.tick(idx, playback.playing);
+    // End-of-clip detection — fires the scorecard once per session.
+    quiz.maybeComplete(idx);
 
     // Auto-skip uncalibrated gaps during playback — but only when
     // quiz isn't currently paused at a decision moment AND the
@@ -631,6 +668,36 @@ window.addEventListener("keydown", (e) => {
 
 speedSelect.addEventListener("change", (e) => {
   if (playback) playback.setSpeed(parseFloat(e.target.value));
+});
+
+quizReplayBtn.addEventListener("click", () => {
+  // Scrub the playback back to the start of the just-revealed event
+  // so the user can rewatch the actual play in real time.
+  if (!quiz.currentEvent && quiz.choices.size === 0) return;
+  // Find the most recent committed event
+  let target = null;
+  for (const ev of quiz.summary().breakdown) target = ev.event; // last wins
+  if (!target) return;
+  jumpToFrame(target.frame_start);
+  quizRevealEl.classList.add("hidden");
+});
+
+quizScorecardRestartBtn.addEventListener("click", () => {
+  quizScorecardEl.classList.add("hidden");
+  if (!data) return;
+  // Reset quiz state and scrub to start
+  quiz.deactivate();
+  quiz.activate();
+  quizScoreEl.textContent = "0 / 0";
+  jumpToFrame(0);
+  if (playback) {
+    playback.play();
+    playBtn.textContent = "Pause";
+  }
+});
+
+quizScorecardCloseBtn.addEventListener("click", () => {
+  quizScorecardEl.classList.add("hidden");
 });
 
 povSelect.addEventListener("change", (e) => {

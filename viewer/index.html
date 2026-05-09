@@ -57,6 +57,18 @@
   <div id="quiz-reveal" class="hidden">
     <div id="quiz-reveal-result"></div>
     <div id="quiz-reveal-detail"></div>
+    <div id="quiz-reveal-actions">
+      <button id="quiz-replay-btn">Replay this play</button>
+    </div>
+  </div>
+
+  <!-- End-of-clip scorecard: shown when playback finishes with quiz active. -->
+  <div id="quiz-scorecard" class="hidden">
+    <div id="quiz-scorecard-title">Quiz complete</div>
+    <div id="quiz-scorecard-score"></div>
+    <div id="quiz-scorecard-breakdown"></div>
+    <button id="quiz-scorecard-restart">Restart quiz</button>
+    <button id="quiz-scorecard-close">Close</button>
   </div>
 
   <!-- Surface JS errors visibly on the page; runs before the module loads

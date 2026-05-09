@@ -336,6 +336,81 @@ html, body {
 #quiz-reveal-detail .rating-warning { color: #f5c542; font-weight: bold; }
 #quiz-reveal-detail .rating-poor    { color: #e5484d; font-weight: bold; }
 
+#quiz-reveal-actions { margin-top: 10px; }
+#quiz-replay-btn {
+  background: #2c2c2c;
+  color: #eee;
+  border: 1px solid #555;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#quiz-replay-btn:hover { background: #6e2dcc; border-color: #8a4cff; }
+
+/* While a quiz overlay or reveal is showing, push the active-event
+   banner up out of its way so they don't visually collide. */
+body.quiz-paused #active-event-banner { top: 22px; }
+
+#quiz-scorecard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.96);
+  border: 2px solid #8a4cff;
+  border-radius: 12px;
+  padding: 28px 36px;
+  z-index: 30;
+  text-align: center;
+  min-width: 460px;
+  box-shadow: 0 0 60px rgba(138, 76, 255, 0.5);
+}
+#quiz-scorecard.hidden { display: none; }
+#quiz-scorecard-title {
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  color: #fff;
+}
+#quiz-scorecard-score {
+  font-size: 38px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 18px;
+  color: #ffe54a;
+  font-weight: bold;
+}
+#quiz-scorecard-breakdown {
+  font-size: 13px;
+  text-align: left;
+  color: #ccc;
+  margin-bottom: 20px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+#quiz-scorecard-breakdown .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #333;
+}
+#quiz-scorecard-breakdown .row.matched { color: #3ddc84; }
+#quiz-scorecard-breakdown .row.diverged { color: #f5c542; }
+#quiz-scorecard button {
+  background: #6e2dcc;
+  color: #fff;
+  border: none;
+  padding: 8px 18px;
+  margin: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: bold;
+}
+#quiz-scorecard button:hover { background: #8a4cff; }
+#quiz-scorecard-close { background: #444 !important; }
+
 #play-btn {
   background: #1f6feb;
   color: #fff;
