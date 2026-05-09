@@ -59,9 +59,30 @@ without a confirmation step from Derek; just write the analysis to
 - **Don't write text reports** — Derek dropped that as an objective.
 - **Don't run the full main.py pipeline on a new clip** without asking
   — it takes ~minutes and ties up the GPU.
-- **Don't build a Unity branch** — Derek and I discussed it on
-  2026-05-09; the answer was to stay in the browser stack. (Notes in
-  HANDOFF.md / memory.)
+- **Don't start the Unity stretch-goal branch** without explicit user
+  approval (see "Stretch goals" below).
+
+## Stretch goals (don't start unprompted)
+
+### Unity (or Godot/Unreal) playable simulator
+Derek's articulated north-star vision (2026-05-09): **VR-style hockey
+decision-training sim loaded from his own shifts**. Take the
+tracking-derived world state at a real decision moment, drop the user
+into POV with a gamepad / VR controllers, and let them play out
+alternative decisions. Repetition rebuilds neural pathways: retraining
+bad habits, learning to scan-before-receive, growing hockey IQ in a
+safe high-rep environment. "VR hockey, but the world is your actual
+shifts."
+
+This is the *answer* to "why are we building this and not just
+analyzing film." Every current phase (calibration → tracking →
+viewer → Quiz Mode) is a stepping stone toward this.
+
+**When to actually start it:** when the upstream tracking quality is
+high enough that loading a real shift into a playable world will feel
+trustworthy. We're not there yet — current frontier is still
+avatar-placement accuracy on livebarn_cropped. Until Derek gives the
+green light, keep iterating on the browser-stack viewer.
 
 ## When this file is empty
 Pick from the "Outstanding work / next likely batch" section in
