@@ -36,6 +36,8 @@ const quizRevealEl = document.getElementById("quiz-reveal");
 const quizRevealResultEl = document.getElementById("quiz-reveal-result");
 const quizRevealDetailEl = document.getElementById("quiz-reveal-detail");
 const quizReplayBtn = document.getElementById("quiz-replay-btn");
+const quizViewTopdownBtn = document.getElementById("quiz-view-topdown");
+const quizViewPovBtn = document.getElementById("quiz-view-pov");
 const quizScorecardEl = document.getElementById("quiz-scorecard");
 const quizScorecardScoreEl = document.getElementById("quiz-scorecard-score");
 const quizScorecardBreakdownEl = document.getElementById("quiz-scorecard-breakdown");
@@ -111,6 +113,11 @@ buildCameras();
 
 // ── Avatar registry
 const avatars = new Map(); // track_id -> { mesh, lastPos, lastFrameIdx }
+
+// Quiz-pause view preference. "topdown" reads tactically; "pov" puts the
+// user at the actor's eye level looking forward — the END-GOAL training
+// experience for real-time decision-making feel.
+let quizViewMode = "topdown";
 
 // Yellow halo ring placed under the quiz actor's avatar so the user
 // can spot them at a glance. Positioned each frame in activeCamera().
@@ -506,12 +513,11 @@ function updateActiveEventOverlays(frameIdx) {
 }
 
 function activeCamera() {
-  // Quiz takes priority: while paused on a decision, use the TOP-DOWN
-  // camera (coach's-tape view). Pattern-reading from above is what
-  // hockey decision-makers actually train on; ground-level POV /
-  // decision-cam are visually impressive but tactically illegible.
-  // The yellow actor halo marks the decision-maker so they're easy to
-  // spot in the formation.
+  // Quiz takes priority: while paused on a decision, use either the
+  // TOP-DOWN camera (default — best for tactical pattern-reading) or
+  // the PLAYER-POV camera (the END-GOAL training experience: see what
+  // the carrier sees at the moment of decision). User toggles via the
+  // buttons in the quiz overlay or the V key.
   if (quiz.active && quiz.phase === "paused" && quiz.currentEvent) {
     const tid = quiz.currentEvent.player_id;
     const entry = (tid !== null && tid !== undefined) ? avatars.get(tid) : null;
@@ -519,14 +525,20 @@ function activeCamera() {
       actorHalo.position.set(entry.mesh.position.x, 0.06, entry.mesh.position.z);
       actorHalo.visible = true;
       povStatusEl.classList.add("hidden");
+      if (quizViewMode === "pov") {
+        updatePOVCamera(cameras.pov, entry.mesh);
+        return cameras.pov;
+      }
+      return cameras.topdown;
     } else {
       // Actor has no current avatar (track-id discontinuity). The
       // renderable filter in quiz.loadFromData should normally prevent
       // this, but keep the hint surfaced in case it slips through.
       actorHalo.visible = false;
       povStatusEl.classList.toggle("hidden", false);
+      // POV with no actor = nowhere to put the camera; force top-down.
+      return cameras.topdown;
     }
-    return cameras.topdown;
   }
   actorHalo.visible = false;
 
@@ -666,6 +678,11 @@ window.addEventListener("keydown", (e) => {
       quiz.skip();
       return;
     }
+    if (e.key === "v" || e.key === "V") {
+      // Toggle the quiz view between top-down and player POV
+      setQuizView(quizViewMode === "pov" ? "topdown" : "pov");
+      return;
+    }
     const num = parseInt(e.key);
     if (!isNaN(num) && num >= 1 && num <= 9) {
       const btn = quizChoicesEl.querySelector(`[data-hotkey="${num}"]`);
@@ -686,6 +703,14 @@ window.addEventListener("keydown", (e) => {
 speedSelect.addEventListener("change", (e) => {
   if (playback) playback.setSpeed(parseFloat(e.target.value));
 });
+
+function setQuizView(mode) {
+  quizViewMode = mode;
+  quizViewTopdownBtn.classList.toggle("active", mode === "topdown");
+  quizViewPovBtn.classList.toggle("active", mode === "pov");
+}
+quizViewTopdownBtn.addEventListener("click", () => setQuizView("topdown"));
+quizViewPovBtn.addEventListener("click", () => setQuizView("pov"));
 
 quizReplayBtn.addEventListener("click", () => {
   // Scrub the playback back to the start of the just-revealed event

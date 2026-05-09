@@ -302,6 +302,30 @@ html, body {
   letter-spacing: 0.5px;
 }
 
+#quiz-view-toggle {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+#quiz-view-toggle button {
+  background: #2c2c2c;
+  color: #aaa;
+  border: 1px solid #444;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+#quiz-view-toggle button.active {
+  background: #6e2dcc;
+  color: #fff;
+  border-color: #8a4cff;
+}
+#quiz-view-toggle button:hover { background: #3a3a3a; }
+#quiz-view-toggle button.active:hover { background: #803df0; }
+
 #quiz-reveal {
   position: absolute;
   bottom: 80px;

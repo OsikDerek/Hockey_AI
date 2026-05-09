@@ -201,6 +201,57 @@ def stitch(payload: dict, max_gap: int, max_dist: float, min_track_frames: int,
         if ev.get("player_id") is not None:
             ev["player_id"] = remap(ev["player_id"])
 
+    # 6. Per-track EMA position smoothing. Even within a stable track,
+    # ByteTrack-driven ice_xy can jitter ±5 ft frame-to-frame because
+    # the underlying detection is noisy. EMA over a track's chronological
+    # sequence flattens the jitter without losing real movement.
+    # alpha = 0.30 balances smoothness vs responsiveness — at 30 fps a
+    # change settles in ~5 frames.
+    smoothed_observations = 0
+    smoothing_alpha = 0.30
+    by_canonical_player = defaultdict(list)  # canonical_tid -> [(frame_idx, player_dict_ref)]
+    by_canonical_goalie = defaultdict(list)
+    for fi, fr in enumerate(frames):
+        if not fr.get("calibrated"):
+            continue
+        for p in fr.get("players") or []:
+            tid = p.get("track_id")
+            if tid is None or tid < 0:
+                continue
+            by_canonical_player[tid].append((fi, p))
+        for g in fr.get("goalies") or []:
+            tid = g.get("track_id")
+            if tid is None or tid < 0:
+                continue
+            by_canonical_goalie[tid].append((fi, g))
+
+    def smooth_sequence(seq):
+        # seq: [(frame_idx, dict_ref)] sorted by frame_idx
+        seq.sort(key=lambda t: t[0])
+        ema_x = None
+        ema_y = None
+        nonlocal_count = 0
+        for fi, d in seq:
+            x = d.get("ice_x")
+            y = d.get("ice_y")
+            if x is None or y is None:
+                continue
+            if ema_x is None:
+                ema_x = float(x)
+                ema_y = float(y)
+            else:
+                ema_x = (1 - smoothing_alpha) * ema_x + smoothing_alpha * x
+                ema_y = (1 - smoothing_alpha) * ema_y + smoothing_alpha * y
+            d["ice_x"] = round(ema_x, 2)
+            d["ice_y"] = round(ema_y, 2)
+            nonlocal_count += 1
+        return nonlocal_count
+
+    for tid, seq in by_canonical_player.items():
+        smoothed_observations += smooth_sequence(seq)
+    for tid, seq in by_canonical_goalie.items():
+        smoothed_observations += smooth_sequence(seq)
+
     # Stats for the writer
     surviving_tracks = len(set(canonical.values()))
     payload["track_stitching"] = {
@@ -208,6 +259,8 @@ def stitch(payload: dict, max_gap: int, max_dist: float, min_track_frames: int,
         "merges_applied": merges,
         "surviving_tracks": surviving_tracks,
         "intra_frame_dropped": intra_frame_dropped,
+        "smoothed_observations": smoothed_observations,
+        "smoothing_alpha": smoothing_alpha,
         "max_gap_frames": max_gap,
         "max_distance_ft": max_dist,
         "min_track_frames": min_track_frames,

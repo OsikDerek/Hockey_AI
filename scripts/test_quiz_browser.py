@@ -173,6 +173,16 @@ def main(argv):
             summary["phases"]["first_overlay"] = {
                 "question": question, "choices": choices, "hud": hud,
             }
+            # Capture the POV view of this same decision moment so we
+            # can verify the toggle works end-to-end.
+            try:
+                page.click("#quiz-view-pov")
+                page.wait_for_timeout(200)
+                page.screenshot(path=str(OUT_DIR / "02b_paused_pov.png"))
+                page.click("#quiz-view-topdown")
+                page.wait_for_timeout(200)
+            except Exception as e:
+                summary["errors"].append(f"POV toggle failed: {e}")
 
             # 4. Commit choices for up to N questions
             committed = 0
