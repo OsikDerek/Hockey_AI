@@ -518,8 +518,16 @@ resize();
 // ── UI wiring
 camButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
+    // Skip non-camera buttons that happen to live in .camera-controls
+    // (e.g. the Quiz Mode toggle). Without this guard the click would
+    // set activeCamMode = undefined → cameras[undefined] → renderer
+    // crashes on the next frame with "camera.parent of undefined".
+    if (!btn.dataset.cam) return;
     activeCamMode = btn.dataset.cam;
-    camButtons.forEach((b) => b.classList.toggle("active", b === btn));
+    camButtons.forEach((b) => {
+      if (!b.dataset.cam) return;
+      b.classList.toggle("active", b === btn);
+    });
   });
 });
 

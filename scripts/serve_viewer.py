@@ -69,7 +69,13 @@ def main() -> int:
     except Exception:
         pass
 
-    with socketserver.TCPServer(("127.0.0.1", PORT), handler) as httpd:
+    # ThreadingHTTPServer instead of single-threaded TCPServer — the
+    # browser keeps a long-lived connection open via keep-alive, which
+    # was blocking new requests (curl / Playwright would see connection
+    # refused while the actual user tab held the only thread).
+    server_cls = http.server.ThreadingHTTPServer
+    server_cls.allow_reuse_address = True
+    with server_cls(("127.0.0.1", PORT), handler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

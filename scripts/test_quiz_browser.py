@@ -67,13 +67,12 @@ def main(argv):
         page.on("pageerror", lambda e: log_lines.append(f"[pageerror] {e}"))
 
         print(f"Loading {url} ...")
-        try:
-            page.goto(url, wait_until="networkidle", timeout=15000)
-        except Exception as e:
-            summary["errors"].append(f"goto: {e}")
-            console_log_path.write_text("\n".join(log_lines))
-            result_path.write_text(json.dumps(summary, indent=2))
-            return 1
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        # Settle: 2s for module imports + JSON load + first RAF
+        page.wait_for_timeout(2000)
+        print(f"  console events captured so far: {len(log_lines)}")
+        for line in log_lines[:30]:
+            print(f"  | {line[:400]}")
 
         # 1. Initial load — wait for data-status to update beyond placeholder
         try:
