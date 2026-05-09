@@ -454,26 +454,27 @@ function updateActiveEventOverlays(frameIdx) {
 }
 
 function activeCamera() {
-  // Quiz takes priority: while paused on a decision, use the Decision
-  // Cam (third-person behind the actor) so the user sees the actor +
-  // play context, not staring through the actor's eyes at the boards.
-  // Falls back to broadcast cam when the actor avatar can't be located.
+  // Quiz takes priority: while paused on a decision, use the TOP-DOWN
+  // camera (coach's-tape view). Pattern-reading from above is what
+  // hockey decision-makers actually train on; ground-level POV /
+  // decision-cam are visually impressive but tactically illegible.
+  // The yellow actor halo marks the decision-maker so they're easy to
+  // spot in the formation.
   if (quiz.active && quiz.phase === "paused" && quiz.currentEvent) {
     const tid = quiz.currentEvent.player_id;
     const entry = (tid !== null && tid !== undefined) ? avatars.get(tid) : null;
     if (entry && entry.mesh.visible) {
-      updateDecisionCamera(cameras.decision, entry.mesh);
-      // Pin the actor halo to the avatar's foot
       actorHalo.position.set(entry.mesh.position.x, 0.06, entry.mesh.position.z);
       actorHalo.visible = true;
       povStatusEl.classList.add("hidden");
-      return cameras.decision;
+    } else {
+      // Actor has no current avatar (track-id discontinuity). The
+      // renderable filter in quiz.loadFromData should normally prevent
+      // this, but keep the hint surfaced in case it slips through.
+      actorHalo.visible = false;
+      povStatusEl.classList.toggle("hidden", false);
     }
-    // Actor has no current avatar — fall back to broadcast so the user
-    // at least sees the rink while reading the event banner.
-    actorHalo.visible = false;
-    povStatusEl.classList.toggle("hidden", false);
-    return cameras.broadcast;
+    return cameras.topdown;
   }
   actorHalo.visible = false;
 

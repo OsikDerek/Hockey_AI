@@ -46,9 +46,70 @@ export class Quiz {
       this._eligibleEvents = [];
       return;
     }
+    // Quality filter: only keep events the viewer can render meaningfully.
+    // We pre-build a frame-index → calibrated-frame index lookup so that
+    // for each event we can check whether the actor's track_id has been
+    // calibrated recently AND whether enough other players have positions
+    // to form a coachable scene. Without this, the quiz fires prompts
+    // pointing at empty rinks.
+    const frames = data.frames || [];
+    // Per-track last-calibrated-frame map, built once in a forward sweep.
+    const lastCalibFrame = new Map();   // track_id -> last frame_idx
+    let lastFrameAnyPlayers = -1;
+    let recentPlayerCount = new Map();  // frame_idx -> distinct active tracks
+    for (let i = 0; i < frames.length; i++) {
+      const fr = frames[i];
+      if (!fr.calibrated) continue;
+      lastFrameAnyPlayers = i;
+      const seen = new Set();
+      for (const p of fr.players || []) {
+        if (p.track_id !== undefined && p.track_id >= 0) {
+          lastCalibFrame.set(p.track_id, i);
+          seen.add(p.track_id);
+        }
+      }
+      for (const g of fr.goalies || []) {
+        if (g.track_id !== undefined && g.track_id >= 0) {
+          lastCalibFrame.set(g.track_id, i);
+          seen.add(g.track_id);
+        }
+      }
+      recentPlayerCount.set(i, seen.size);
+    }
+
+    // Renderable threshold: actor must have a calibrated position within
+    // RECENCY_FRAMES of the event, AND there must be ≥4 distinct tracks
+    // with recent positions for the scene to read as hockey.
+    const RECENCY_FRAMES = 90;  // ~3 sec @ 30fps
+    const fps = data.fps || 30;
+
+    function recentTrackCount(eventIdx) {
+      let count = 0;
+      const cutoff = eventIdx - RECENCY_FRAMES;
+      for (const [tid, lastI] of lastCalibFrame) {
+        if (lastI >= cutoff && lastI <= eventIdx) count++;
+      }
+      return count;
+    }
+
     this._eligibleEvents = data.events
       .filter((e) => QUIZ_OPTIONS[e.event_type])
+      .filter((e) => {
+        if (e.player_id === null || e.player_id === undefined) return false;
+        const lastSeen = lastCalibFrame.get(e.player_id);
+        if (lastSeen === undefined) return false;
+        if (e.frame_idx - lastSeen > RECENCY_FRAMES) return false;
+        if (recentTrackCount(e.frame_idx) < 4) return false;
+        return true;
+      })
       .sort((a, b) => a.frame_idx - b.frame_idx);
+
+    // Diagnostic to help triage why quiz might be silent on a given clip.
+    const total = data.events.filter((e) => QUIZ_OPTIONS[e.event_type]).length;
+    console.log(
+      `Quiz: ${this._eligibleEvents.length}/${total} quiz-eligible events ` +
+      `pass the renderable filter (actor has calibrated history + >=4 players in scene)`
+    );
   }
 
   toggle() {
