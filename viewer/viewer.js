@@ -401,25 +401,42 @@ function applyFrame(fr) {
   for (const p of fr.players || []) applyOne(p, false);
   for (const g of fr.goalies || []) applyOne(g, true);
 
-  // HUD: how many avatars are currently rendered vs the per-frame raw
-  // detection count. Helps diagnose "where are my players" — if rawN is
-  // low the data is sparse; if rawN is high but visibleN is low something
-  // is hiding them.
-  const rawN = (fr.players?.length || 0) + (fr.goalies?.length || 0);
-  let visibleN = 0;
-  for (const e of avatars.values()) if (e.mesh.visible) visibleN++;
-  hudCounterEl.textContent = `${visibleN} avatars · ${rawN} this frame · ${avatars.size} total tracks`;
-  // Avatars not seen this calibrated frame: hide only if they've been
-  // missing for a while (>STALE_FRAMES). Calibration drops in/out across
-  // 70-90% of frames in broadcast follow-cam, so we hold avatars for
-  // ~5s of real time before hiding them.
-  const STALE_FRAMES = Math.max(60, Math.round(fps * 5.0));
+  // Avatars not seen this calibrated frame: hide if they've been
+  // missing for >STALE_FRAMES (~1.5s). Tighter than the prior 5s window
+  // because ByteTrack on these clips emits hundreds of ghost track IDs
+  // per real player; long staleness lets ghosts pile up into a crowd.
+  const STALE_FRAMES = Math.max(20, Math.round(fps * 1.5));
   for (const [tid, entry] of avatars) {
     if (seenIds.has(tid)) continue;
     if (entry.lastFrameIdx >= 0 && currentFrameIdx - entry.lastFrameIdx > STALE_FRAMES) {
       entry.mesh.visible = false;
     }
   }
+
+  // Hard cap on visible avatars. With 5v5 + 2 goalies = 12 actual players
+  // on the ice, anything beyond ~14 visible is ghost-track noise. Keep
+  // the most-recently-updated ones; hide the rest.
+  const MAX_VISIBLE_AVATARS = 14;
+  const visible = [];
+  for (const [tid, entry] of avatars) {
+    if (entry.mesh.visible) visible.push([tid, entry]);
+  }
+  if (visible.length > MAX_VISIBLE_AVATARS) {
+    visible.sort((a, b) => b[1].lastFrameIdx - a[1].lastFrameIdx);
+    for (let i = MAX_VISIBLE_AVATARS; i < visible.length; i++) {
+      visible[i][1].mesh.visible = false;
+    }
+  }
+
+  // HUD: how many avatars are currently rendered vs the per-frame raw
+  // detection count. Helps diagnose "where are my players" — if rawN is
+  // low the data is sparse; if rawN is high but visibleN is low something
+  // is hiding them. Reads AFTER stale-hide + cap so it reflects what's
+  // actually on screen this frame.
+  const rawN = (fr.players?.length || 0) + (fr.goalies?.length || 0);
+  let visibleN = 0;
+  for (const e of avatars.values()) if (e.mesh.visible) visibleN++;
+  hudCounterEl.textContent = `${visibleN} avatars · ${rawN} this frame · ${avatars.size} total tracks`;
 
   if (fr.puck) {
     puck.visible = true;

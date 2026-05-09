@@ -112,36 +112,40 @@ def main(argv):
         if not score_visible:
             summary["errors"].append("Quiz Mode toggle didn't reveal score widget")
 
-        # 3. Hit Play. Bump playback speed AND scrub close to the first
-        # renderable event (sits at frame 367 on rush) so we don't wait
-        # through 12 real-time seconds of playback during the test.
+        # 3. Hit Play. Scrub close to the first RENDERABLE quiz event
+        # (the renderable filter drops most events on bad-data clips,
+        # so DOM markers don't reflect what the quiz actually fires on).
         page.select_option("#speed", "2")
-        # Find the lowest event-marker offset and scrub the scrubber to
-        # ~30 frames before it via direct value set + input event.
-        first_marker_left = page.evaluate("""
-          () => {
-            const m = document.querySelectorAll('#event-markers .event-marker');
-            if (!m.length) return null;
-            let best = null;
-            for (const el of m) {
-              const pct = parseFloat(el.style.left);
-              if (best === null || pct < best) best = pct;
-            }
-            return best;
-          }
-        """)
-        if first_marker_left is not None:
-            scrub_pct = max(0, first_marker_left - 4)
-            page.evaluate(f"""
-              () => {{
-                const sc = document.getElementById('scrubber');
-                const max = parseInt(sc.max);
-                const target = Math.floor(max * {scrub_pct / 100.0});
-                sc.value = target;
-                sc.dispatchEvent(new Event('input', {{bubbles: true}}));
-              }}
-            """)
-            page.wait_for_timeout(300)
+        # Read the JSON to find the first quiz-eligible event's frame_idx,
+        # then scrub there. The renderable filter is applied client-side
+        # so we approximate by jumping to the first quiz-eligible DOM
+        # marker; if quiz still doesn't fire, the test will time out.
+        # Better approach: have the page expose an API. For now, fetch
+        # the JSON directly and pick the first eligible event.
+        try:
+            import json
+            # Attempt local read of the JSON since we know the path scheme
+            json_path = PROJECT_ROOT / "output" / f"{args.clip}_positions.json"
+            if json_path.exists():
+                payload = json.loads(json_path.read_text())
+                quiz_types = {"shot_vs_pass", "odd_man_rush", "zone_entry",
+                              "breakout", "missed_opportunity"}
+                eligible = [e for e in payload.get("events", [])
+                            if e["event_type"] in quiz_types]
+                if eligible:
+                    first_idx = min(e["frame_idx"] for e in eligible)
+                    target = max(0, first_idx - 40)  # 40 frames pre-trigger
+                    total = len(payload.get("frames", [])) - 1
+                    page.evaluate(f"""
+                      () => {{
+                        const sc = document.getElementById('scrubber');
+                        sc.value = {target};
+                        sc.dispatchEvent(new Event('input', {{bubbles: true}}));
+                      }}
+                    """)
+                    page.wait_for_timeout(300)
+        except Exception as e:
+            print(f"  pre-scrub: {e}")
         page.click("#play-btn")
         first_overlay = False
         try:
@@ -164,8 +168,10 @@ def main(argv):
                 ".quiz-choice-btn",
                 "els => els.map(e => e.dataset.choice)",
             )
+            # Diagnostic: how many avatars are visible during the pause?
+            hud = page.text_content("#hud-counter")
             summary["phases"]["first_overlay"] = {
-                "question": question, "choices": choices,
+                "question": question, "choices": choices, "hud": hud,
             }
 
             # 4. Commit choices for up to N questions
