@@ -15,7 +15,82 @@ directory or in the repo's git history.
 4. The viewer at `viewer/` is the current frontier. Phase B1 (full
    homography) is the most likely next batch.
 
-## Where we are (as of commit `f7a4e4f`)
+## Where we are (as of commit `cbbe4a9` — May 2026 session)
+
+This session's batches (top = most recent):
+
+- **Track-ID stitching** (`cbbe4a9`): post-process JSON merges ByteTrack ghost
+  IDs (252 → 79 unique tracks on livebarn_cropped). Three passes: within-frame
+  dedup (drop double-detections within 4 ft), temporal stitching (merge tracks
+  that "die" + are "born" within 90 frames + 15 ft + same team + same role),
+  union-find rewrite of all track_id refs. Integrated into `_write_positions_json`.
+  Preserves goalie-vs-player separation.
+- **Avatar visible-cap + stale fix** (`37c54ec`): viewer caps visible avatars
+  at 14 (5v5 + goalies + buffer); STALE_FRAMES dropped 5s → 1.5s. Defeats the
+  "93 ghost avatars" symptom while underlying tracking is fixed.
+- **Quiz Mode end-to-end fixes** (`0f6e6c5`, `8fc4188`, `e18a638`): scorecard
+  fires when all events answered (was hanging); fixed Three.js crash from
+  Quiz button accidentally being matched by `.camera-controls button`
+  selector; auto-skip-uncalibrated was leaping over events sitting in
+  uncalibrated stretches.
+- **Quiz polish** (`2494e7a`, `53650de`, `d6607c7`): top-down camera during
+  quiz pauses (was POV — too tactically illegible); end-of-clip scorecard
+  with breakdown + replay button + restart; renderable-event filter (now
+  detection-count based, was unique-track-count which broke after stitching).
+- **Phase D Quiz** (`ecd461d`): pre-decision pause + POV + choice/reveal +
+  hotkeys + score widget. Built on top of A2 confidence + C1 events JSON.
+- **Self-verification harness** (`992b3d8` + Playwright in this session):
+  `scripts/render_play_frames.py` and `scripts/quiz_simulate.py` for static
+  diagnostics; `scripts/test_quiz_browser.py` drives a headless Chromium via
+  Playwright to verify quiz UI end-to-end. Catches bugs that look fine in
+  code review (e.g., the camera-button selector matching too greedily).
+- **B2 partial / landmark specialist** (`b918c39`, `2f793a0`, `3497089`,
+  `26dd89d`): added `models/landmarks_yolov8n.pt` trained on SHL data
+  (mAP50 0.968), a CV-based blue/red line + boards detector, line×board
+  intersection homography path. Net effect on rush: limited (model doesn't
+  generalize from SHL to NHL broadcast). Net effect on cropped LiveBarn
+  junior footage: minimal — main HockeyAI model handles it once the rink
+  fills the frame.
+- **Phase B1 + safety guards**: 8-DoF homography with degenerate-fit
+  rejection (rink-quad area check, pixel-spread check). Honest about its
+  ceiling: the YOLO landmark detector is the limiter, not the math.
+- **Phase A3** (`4825e29`): `--focus-team {a,b,both}` + `--focus-jersey
+  "<color>"` for self-coaching workflows.
+- **Phase A2** (`82dd71f`): decision-confidence gating + tightened detector
+  triggers. Default `--decision-conf 0.7` filters overlay events.
+- **Phase C1** (`8c300ac`): viewer event timeline + 3D shot-recommendation
+  arrow.
+
+### Best test bed
+**`livebarn_60sec_cropped.mp4`** (data/raw_videos/) — junior hockey shot via
+LiveBarn fixed-cam pano lens, cropped to rink-only. 99.9% calibrated, 7/7
+quiz events renderable, both goalies present, ~14 visible avatars per
+quiz pause. The cropping is what unlocked it — raw uncropped pano view
+gave 0% calibration because the rink was a small portion of frame.
+
+### Current frontier
+Avatar placement accuracy. The user is comparing rendered avatar positions
+vs the actual film by eye. Stitching brought us from 200+ chaotic tracks
+to ~79 stable identities, but tracking is still imperfect. Next
+investigations: position smoothing per track (Kalman?), better team-
+classifier on edge cases, possibly retraining HockeyAI on cropped junior
+footage to improve player detection density.
+
+### Headless verification workflow
+
+```
+.venv/Scripts/python.exe scripts/test_quiz_browser.py --clip <basename>
+```
+
+Drives a real Chromium via Playwright, exercises Quiz Mode, screenshots
+each phase. Output to `output/_quiz_browser/`. Server must be running
+(`scripts/serve_viewer.py`). The harness is genuinely useful for
+verifying viewer/quiz changes without requiring user retest.
+
+---
+
+## Earlier history (before this session)
+
 
 Phases shipped:
 - **Phase A** (commit `1ed104b`): minimal-by-default overlay rendering
@@ -97,28 +172,45 @@ on the new machine and let it write the memory files itself.
 > memory files into your persistent memory and orient me on what we
 > shipped last and what's next.
 
-## Outstanding work / next likely batch
+## Outstanding work / next likely batch (May 2026)
 
-**Phase B1: full homography.** Need to disambiguate faceoff-dot class
-into specific dots using their position relative to other detected
-landmarks (goal lines, blue lines, centroid). Once we have 4 known
-correspondences we can compute `cv2.findHomography()` instead of the
-similarity transform. This should bring rush-clip calibration from 2%
-into the 70-90% range.
+**Avatar placement accuracy** is the active frontier. Derek is doing
+side-by-side comparison of rendered top-down vs the actual LiveBarn
+film. Track-ID stitching landed (`cbbe4a9`); next investigations:
 
-**Phase C1: viewer polish.** With B1 calibration, the 3D viewer becomes
-genuinely useful. Could add: decision overlays in 3D (shot
-recommendation arrows pointing at open holes), multi-shift comparison,
-playback timeline with event markers.
+1. **Per-track position smoothing** — even within one stable track,
+   ice_xy can jitter ±5 ft frame to frame. Kalman or simple EMA
+   per-track would smooth without losing real movement.
+2. **Spatial team-classification refinement** — on livebarn_cropped
+   the gray-vs-gray clusters are ambiguous (junior teams often wear
+   similar colors). Could augment with per-cluster centroid
+   stability checks.
+3. **Custom HockeyAI retrain on cropped junior footage** — the SHL
+   specialist didn't generalize, but a small training set from the
+   user's own clips might.
 
-**Phase D: simulator.** Take a real shift's positions, freeze at decision
-points, ask the user "what would you do?", branch on choice. WebXR for VR.
+**Phase D simulator (full version)**: branching playback ("if you'd
+passed instead, here's how the play would have ended"), WebXR/VR view,
+multi-shift comparison. Quiz framework already shipped (`ecd461d`+).
 
 ## Things NOT to do
 
-- Don't push to remote without explicit ask — Derek prefers to be in the
-  loop on git remote operations.
-- Don't burn time perfecting features that are already silenced by the
-  overlay quality gates. The goal is honest output, not polished output.
-- Don't propose new tracking models or new pose estimators — we use
-  HockeyAI YOLOv8 + ByteTrack + MediaPipe. Stick with those.
+- **Push freely** — Derek opted into push-as-we-work routine on
+  2026-05-08. Commit + push after each non-trivial change. Don't skip
+  hooks or force-push without explicit ask.
+- Don't burn time perfecting features silenced by overlay quality gates.
+  The goal is honest output, not polished output.
+- Don't propose new tracking models / pose estimators — we use
+  HockeyAI YOLOv8 + ByteTrack + MediaPipe. The track-ID stitcher is
+  the right place to fix tracking weakness, not model swaps.
+- Don't write text reports — Derek dropped that as an objective on
+  2026-05-08. Focus on the visualizer + simulator path.
+
+## Test-bed summary
+
+| Clip | Best for | Calibrated frames | Quiz events |
+|---|---|---|---|
+| `livebarn_60sec_cropped.mp4` | **Phase D Quiz, avatar viz** | 99.9% | 7/7 renderable |
+| `rush_30sec_clip.mp4` | Detector triggering tests | 21% | 2/16 renderable |
+| `shootout_60sec.mp4` | Goalie / shootout context | 6% | 0 quiz-eligible |
+| `ig_1v1_beating_guys.mp4` | High event count | 0.25% | 1/30 renderable |
