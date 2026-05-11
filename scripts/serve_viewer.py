@@ -30,14 +30,97 @@ mimetypes.add_type("text/css", ".css")
 
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
-    """Disable caching during dev — we iterate viewer.js often and stale
-    cached copies were causing 'no errors but nothing renders' confusion."""
+    """Static handler with two things SimpleHTTPRequestHandler doesn't do:
+
+    1. Disable browser caching of viewer/* — we iterate viewer.js often
+       and stale cached copies were causing "no errors but nothing
+       renders" confusion.
+    2. Serve HTTP Range requests on video files so the <video> element
+       in the source-video panel can stream. Without 206 responses,
+       Chrome's video pipeline stalls in readyState=0 forever even
+       though the server happily returns the full file on a plain GET.
+       (Spent 30 mins debugging this — the bug looks like a viewer.js
+       issue but is entirely server-side.)
+    """
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        self.send_header("Accept-Ranges", "bytes")
         super().end_headers()
+
+    def send_head(self):
+        """Override to handle HTTP Range. Returns the open file handle
+        positioned at the start of the requested byte range, OR None on
+        error / 304 / non-range path (caller treats None as 'response
+        already sent, don't write body').
+        """
+        range_header = self.headers.get("Range")
+        if not range_header:
+            return super().send_head()
+
+        # Resolve the path the same way the base handler does. translate_path
+        # strips query strings and resolves the URL to a filesystem path.
+        path = self.translate_path(self.path)
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+
+        try:
+            fs = os.fstat(f.fileno())
+            file_size = fs.st_size
+        except OSError:
+            f.close()
+            self.send_error(500, "Could not stat file")
+            return None
+
+        # Parse "bytes=START-END" (END is optional)
+        try:
+            units, _, range_spec = range_header.partition("=")
+            if units.strip().lower() != "bytes":
+                raise ValueError("only 'bytes' range unit supported")
+            start_s, _, end_s = range_spec.partition("-")
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else file_size - 1
+            if start < 0 or end >= file_size or start > end:
+                raise ValueError("range out of bounds")
+        except (ValueError, AttributeError):
+            self.send_response(416)  # Range Not Satisfiable
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.end_headers()
+            f.close()
+            return None
+
+        length = end - start + 1
+        self.send_response(206)  # Partial Content
+        ctype = self.guess_type(path)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        self.end_headers()
+
+        # Seek + return; copyfile() in the base handler will stream the rest.
+        # But we only want LENGTH bytes — implement our own bounded copy.
+        f.seek(start)
+        try:
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            f.close()
+        # Returning None tells SimpleHTTPRequestHandler we already wrote
+        # the body — it won't try to copy more.
+        return None
 
 
 def find_latest_positions_json() -> Path | None:

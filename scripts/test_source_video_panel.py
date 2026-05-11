@@ -7,19 +7,58 @@ Headless Chromium doesn't bundle proprietary codec licenses, so the
 End-to-end decode validation has to happen in a real browser (Edge /
 Chrome on the user's machine).
 
+ALSO verifies the server supports HTTP Range requests on the video URL,
+because Python's SimpleHTTPRequestHandler doesn't by default — and
+without 206 Partial Content responses the <video> element stalls
+forever even on a real browser.
+
 Run from project root (server on :8000):
     .venv/Scripts/python.exe scripts/test_source_video_panel.py
 """
 from __future__ import annotations
 
 import sys
+import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 URL = "http://localhost:8000/viewer/index.html?data=/output/livebarn_cropped_positions.json"
+VIDEO_URL = "http://localhost:8000/data/raw_videos/livebarn_60sec_cropped.web.mp4"
+
+
+def _check_range_support():
+    """Hit the video URL with a Range header; expect 206 Partial Content.
+    If the server returns 200 with the full body, the <video> element
+    will stall — fail loudly here so the bug is obvious before we waste
+    time poking at the JS side."""
+    req = urllib.request.Request(VIDEO_URL, headers={"Range": "bytes=0-1023"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            status = resp.status
+            content_range = resp.headers.get("Content-Range")
+            content_length = resp.headers.get("Content-Length")
+    except Exception as e:
+        return False, f"request failed: {e}"
+    if status != 206:
+        return False, (f"got status {status}, expected 206 — server doesn't "
+                       "support Range; video element will stall. "
+                       "Fix: serve_viewer.py needs Range support.")
+    if not content_range or not content_range.startswith("bytes 0-1023/"):
+        return False, f"missing/wrong Content-Range header: {content_range!r}"
+    if content_length != "1024":
+        return False, f"Content-Length should be 1024, got {content_length!r}"
+    return True, f"206 Partial Content, Content-Range={content_range}"
 
 
 def main():
+    # 0. Range-support precheck — without this, real-browser playback stalls
+    # at readyState=0 regardless of all the JS we wire up.
+    ok, msg = _check_range_support()
+    print(f"Range support: {msg}")
+    if not ok:
+        print(f"FAIL (server-side): {msg}")
+        return 2
+
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_context(viewport={"width": 1600, "height": 900}).new_page()
@@ -86,8 +125,10 @@ def main():
         if snap["syncTrigger"] < 1:
             print(f"FAIL: sync didn't reach the seek-attempt branch (syncTrigger={snap['syncTrigger']})")
             return 2
-        if snap["lastTarget"] is None or abs(snap["lastTarget"] - 20.0) > 0.1:
-            print(f"FAIL: sync target wrong: {snap['lastTarget']} (expected ~20.0)")
+        # lastTarget should be >= the scrub target (20s) — auto-play kicked
+        # off when the panel opened, so it may have advanced past 20.
+        if snap["lastTarget"] is None or snap["lastTarget"] < 19.5 or snap["lastTarget"] > 25:
+            print(f"FAIL: sync target out of range: {snap['lastTarget']} (expected 19.5–25)")
             return 2
 
         # 5. Close button hides the panel
