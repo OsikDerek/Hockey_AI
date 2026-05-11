@@ -43,6 +43,14 @@ const quizScorecardScoreEl = document.getElementById("quiz-scorecard-score");
 const quizScorecardBreakdownEl = document.getElementById("quiz-scorecard-breakdown");
 const quizScorecardRestartBtn = document.getElementById("quiz-scorecard-restart");
 const quizScorecardCloseBtn = document.getElementById("quiz-scorecard-close");
+const sourceVideoToggleBtn = document.getElementById("source-video-toggle");
+const sourceVideoPanel = document.getElementById("source-video-panel");
+const sourceVideoCloseBtn = document.getElementById("source-video-close");
+const sourceVideoEl = document.getElementById("source-video");
+const sourceVideoStatusEl = document.getElementById("source-video-status");
+const sourceVideoUrlInput = document.getElementById("source-video-url");
+const sourceVideoLoadBtn = document.getElementById("source-video-load");
+const sourceVideoOffsetInput = document.getElementById("source-video-offset");
 
 // ── Three.js scene
 const scene = new THREE.Scene();
@@ -751,6 +759,7 @@ function tick(nowMs) {
     updateFrameDisplay();
   }
   smoothMotion(nowMs);
+  syncSourceVideo();
   renderer.render(scene, activeCamera());
   requestAnimationFrame(tick);
 }
@@ -914,6 +923,146 @@ povSelect.addEventListener("change", (e) => {
 // Auto-load via ?data=URL query param so scripts/serve_viewer.py can deep-link.
 const params = new URLSearchParams(window.location.search);
 const dataParam = params.get("data");
+// ── Source-video panel ──────────────────────────────────────
+//
+// Side-by-side raw video that scrub-locks to the 3D playback so we can
+// see exactly what the tracker saw at any frame. Auto-derives the URL
+// from the positions JSON name; lets the user override via the input.
+// Lockstep is one-way (3D scrubber → video) because the 3D scrubber is
+// the source of truth.
+
+const sourceVideo = {
+  el: sourceVideoEl,
+  ready: false,
+  loadedSrc: "",
+  offsetSec: 0,
+  // Snap video.currentTime if it drifts beyond this many seconds. Below
+  // this we let the video play naturally to avoid stutter on every tick.
+  syncTolerance: 0.25,
+};
+
+function deriveSourceVideoUrl(jsonPath) {
+  // Strip /output/ prefix and _positions.json suffix, then try a few
+  // patterns under data/raw_videos/ — clips often have a _60sec suffix
+  // or other naming variants vs the positions JSON basename.
+  if (!jsonPath) return null;
+  const m = jsonPath.match(/\/?output\/(.+?)_positions\.json$/);
+  if (!m) return null;
+  const base = m[1];
+  // Browser-friendly H.264 variants come first (`.web.mp4` — see
+  // scripts/prepare_web_video.py). Original-source mp4s often use the
+  // mpeg4 / Simple Profile codec from sports-cam recorders, which
+  // browsers (especially headless Chromium) refuse to decode.
+  const variants = [
+    base,
+    `${base}_60sec`,
+    base.replace(/_cropped$/, "_60sec_cropped"),
+    base.replace(/_cropped$/, ""),
+  ];
+  const urls = [];
+  for (const v of variants) urls.push(`/data/raw_videos/${v}.web.mp4`);
+  for (const v of variants) urls.push(`/data/raw_videos/${v}.mp4`);
+  return urls;
+}
+
+async function probeFirstReachable(urls) {
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { method: "HEAD" });
+      if (r.ok) return u;
+    } catch (_) { /* try next */ }
+  }
+  return null;
+}
+
+function loadSourceVideo(url) {
+  if (!url) return;
+  sourceVideo.ready = false;
+  sourceVideo.loadedSrc = url;
+  sourceVideoEl.src = url;
+  sourceVideoStatusEl.textContent = `loading ${url}…`;
+  sourceVideoStatusEl.className = "";
+  sourceVideoUrlInput.value = url;
+}
+
+sourceVideoEl.addEventListener("loadedmetadata", () => {
+  sourceVideo.ready = true;
+  sourceVideoStatusEl.textContent =
+    `loaded · ${sourceVideoEl.videoWidth}×${sourceVideoEl.videoHeight} · ${sourceVideoEl.duration.toFixed(1)}s`;
+  sourceVideoStatusEl.className = "ok";
+});
+sourceVideoEl.addEventListener("error", () => {
+  sourceVideo.ready = false;
+  sourceVideoStatusEl.textContent =
+    `failed to load — paste the right path in the field below and click Load.`;
+  sourceVideoStatusEl.className = "error";
+});
+
+async function autoLoadSourceVideoFor(jsonPath) {
+  const candidates = deriveSourceVideoUrl(jsonPath) || [];
+  if (!candidates.length) {
+    sourceVideoStatusEl.textContent = "couldn't derive URL — paste a path";
+    sourceVideoStatusEl.className = "error";
+    return;
+  }
+  sourceVideoStatusEl.textContent = "probing…";
+  const found = await probeFirstReachable(candidates);
+  if (found) {
+    loadSourceVideo(found);
+  } else {
+    sourceVideoStatusEl.textContent =
+      `no match (tried ${candidates.length}). Paste path below.`;
+    sourceVideoStatusEl.className = "error";
+    sourceVideoUrlInput.value = candidates[0];
+  }
+}
+
+sourceVideoToggleBtn.addEventListener("click", () => {
+  const hidden = sourceVideoPanel.classList.toggle("hidden");
+  sourceVideoToggleBtn.classList.toggle("active", !hidden);
+  if (!hidden && !sourceVideo.loadedSrc && dataParam) {
+    autoLoadSourceVideoFor(dataParam);
+  }
+});
+sourceVideoCloseBtn.addEventListener("click", () => {
+  sourceVideoPanel.classList.add("hidden");
+  sourceVideoToggleBtn.classList.remove("active");
+});
+sourceVideoLoadBtn.addEventListener("click", () => {
+  const u = sourceVideoUrlInput.value.trim();
+  if (u) loadSourceVideo(u);
+});
+sourceVideoOffsetInput.addEventListener("change", (e) => {
+  sourceVideo.offsetSec = parseFloat(e.target.value) || 0;
+});
+
+// Hook into the render tick: keep the source video's currentTime locked
+// to the 3D playback's frame time. Tolerance band prevents stutter at
+// 1x speed; we only snap when drift exceeds syncTolerance.
+function syncSourceVideo() {
+  sourceVideo.syncCalls = (sourceVideo.syncCalls || 0) + 1;
+  if (!sourceVideo.ready || sourceVideoPanel.classList.contains("hidden")) return;
+  if (!playback || !data) return;
+  sourceVideo.syncTrigger = (sourceVideo.syncTrigger || 0) + 1;
+  const target = (playback.frameIdx / data.fps) + sourceVideo.offsetSec;
+  if (target < 0 || target > sourceVideoEl.duration) return;
+  sourceVideo.lastTarget = target;
+  // Play / pause follow the main scrubber.
+  if (playback.playing && sourceVideoEl.paused) {
+    sourceVideoEl.playbackRate = playback.speed || 1;
+    sourceVideoEl.play().catch(() => {});
+  } else if (!playback.playing && !sourceVideoEl.paused) {
+    sourceVideoEl.pause();
+  }
+  if (sourceVideoEl.playbackRate !== (playback.speed || 1)) {
+    sourceVideoEl.playbackRate = playback.speed || 1;
+  }
+  const drift = Math.abs(sourceVideoEl.currentTime - target);
+  if (drift > sourceVideo.syncTolerance) {
+    sourceVideoEl.currentTime = target;
+  }
+}
+
 if (dataParam) loadData(dataParam, false);
 
 // Debug hook for headless smoothness probes. Read-only from JS console:
@@ -938,6 +1087,14 @@ window.__hockeyAI = {
       z: puck.position.z,
       tx: puckState.targetPos?.x,
       ty: puckState.targetPos?.y,
+    };
+    out.sourceVideo = {
+      ready: sourceVideo.ready,
+      panelHidden: sourceVideoPanel.classList.contains("hidden"),
+      syncCalls: sourceVideo.syncCalls || 0,
+      syncTrigger: sourceVideo.syncTrigger || 0,
+      lastTarget: sourceVideo.lastTarget ?? null,
+      loadedSrc: sourceVideo.loadedSrc,
     };
     return out;
   },

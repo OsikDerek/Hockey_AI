@@ -211,6 +211,105 @@ html, body {
   pointer-events: none;
 }
 
+/* Source-video side-by-side panel. Toggled via the "Source Video" button
+   in the top bar. Lives bottom-right so it doesn't fight the quiz overlay
+   (which sits bottom-center). */
+#source-video-panel {
+  position: absolute;
+  right: 16px;
+  top: 64px;
+  width: 480px;
+  background: rgba(0, 0, 0, 0.92);
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 8px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+#source-video-panel.hidden { display: none; }
+
+#source-video-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #ccc;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+#source-video-close {
+  background: transparent;
+  color: #aaa;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+}
+#source-video-close:hover { color: #fff; }
+
+#source-video {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #000;
+  border-radius: 4px;
+}
+
+#source-video-status {
+  color: #888;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#source-video-status.error { color: #e5484d; }
+#source-video-status.ok { color: #3ddc84; }
+
+#source-video-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: #aaa;
+}
+#source-video-url {
+  flex: 1;
+  background: #1c1c1c;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: monospace;
+}
+#source-video-load {
+  background: #2c2c2c;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#source-video-load:hover { background: #3a3a3a; }
+.source-video-offset-label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+#source-video-offset {
+  width: 56px;
+  background: #1c1c1c;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: monospace;
+}
+
 /* ── Quiz mode ─────────────────────────────────────────────── */
 
 .quiz-btn {

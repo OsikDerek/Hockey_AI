@@ -17,6 +17,7 @@
         <option value="">Pick player...</option>
       </select>
       <button id="quiz-toggle" class="quiz-btn">Quiz Mode</button>
+      <button id="source-video-toggle" title="Show source video for side-by-side comparison">Source Video</button>
     </div>
     <div class="data-info">
       <input type="file" id="file-picker" accept=".json" />
@@ -38,6 +39,28 @@
       <option value="1" selected>1x</option>
       <option value="2">2x</option>
     </select>
+  </div>
+
+  <!-- Side-by-side source-video panel. Toggled via the "Source Video" button.
+       Loads the raw video for this clip and scrub-locks it to the 3D
+       playback so you can see what the tracker actually saw vs what we
+       render. Auto-derives the URL from the positions JSON name; if that
+       fails, the input field lets you point to the right file by hand. -->
+  <div id="source-video-panel" class="hidden">
+    <div id="source-video-header">
+      <span id="source-video-title">Source video</span>
+      <button id="source-video-close" title="Close">×</button>
+    </div>
+    <video id="source-video" muted playsinline></video>
+    <div id="source-video-status">resolving…</div>
+    <div id="source-video-controls">
+      <input type="text" id="source-video-url" placeholder="/data/raw_videos/your_clip.mp4" />
+      <button id="source-video-load">Load</button>
+      <label class="source-video-offset-label">
+        Offset (s):
+        <input type="number" id="source-video-offset" step="0.1" value="0" />
+      </label>
+    </div>
   </div>
 
   <div id="event-tooltip" class="hidden"></div>
