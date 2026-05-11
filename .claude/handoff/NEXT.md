@@ -15,6 +15,31 @@ renderable quiz events). Server: `py -3.12 scripts/serve_viewer.py` or
 
 ## Queued (in priority order)
 
+### 0. ★ Across-rink y-compression (calibration bug, BIG)
+Diagnosed 2026-05-11 on livebarn_cropped: median across-rink player
+y-range is **14.8 ft on an 85-ft-wide rink** (p90 = 27.6 ft). Real
+hockey would be 50+ ft most frames. The detections aren't overlapping
+(min pair distance > 5.9 ft on frame 258) but they're squashed into a
+~15-ft band near the center line.
+
+Likely cause: 64% of calibrated frames use the similarity-transform
+fallback (no perspective recovery), only 36% use full 8-DoF homography.
+The similarity transform can't recover across-rink depth on
+broadcast/follow-cam footage. **This is the root cause of the
+"avatars bunched in a circle" effect** Derek noticed — smoothing makes
+it glide, but the coordinates are still compressed.
+
+Action items (don't start unprompted — Derek may want to pair on this):
+- Audit `RinkCalibrator` / homography pipeline in `src/` to understand
+  why so many frames fall back to similarity. Likely the YOLO landmark
+  detector isn't finding enough labeled points (faceoff dots, lines)
+  per frame. b918c39 was a partial step in this direction.
+- Per-frame: is there a way to interpolate / extrapolate the last good
+  homography into similarity-only frames? Right now we throw away the
+  perspective info.
+- Worth re-running the pipeline with --debug-calibration to see what
+  fraction of frames have what landmark counts.
+
 ### 1. Goalie stick rendering parity
 After the blade restyle in `viewer/avatar.js`, player sticks read as
 sticks but goalies still only have a "pad" block in front of them. Give
