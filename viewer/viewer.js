@@ -1020,8 +1020,18 @@ async function autoLoadSourceVideoFor(jsonPath) {
 sourceVideoToggleBtn.addEventListener("click", () => {
   const hidden = sourceVideoPanel.classList.toggle("hidden");
   sourceVideoToggleBtn.classList.toggle("active", !hidden);
-  if (!hidden && !sourceVideo.loadedSrc && dataParam) {
-    autoLoadSourceVideoFor(dataParam);
+  if (!hidden) {
+    if (!sourceVideo.loadedSrc && dataParam) {
+      autoLoadSourceVideoFor(dataParam);
+    }
+    // Make sure the main playback is rolling — Derek wants to see the
+    // video play immediately after opening the panel, not have to also
+    // press the main Play button. If main is paused, kick it off; the
+    // sync loop will then start the <video> too.
+    if (playback && !playback.playing) {
+      playback.play();
+      playBtn.textContent = "Pause";
+    }
   }
 });
 sourceVideoCloseBtn.addEventListener("click", () => {
