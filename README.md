@@ -1,9 +1,14 @@
-# Hockey AI — Decision-Training Simulator from Real Game Film
+# Hockey AI — Decision Simulator (game-analysis + 3D viewer + Quiz Mode)
 
-A computer-vision + 3D-viewer system that turns broadcast or
-sports-cam hockey footage into a tactical decision-training tool.
-Built by a professional hockey player and skating coach as a personal
-development project — not a generic analytics platform.
+A computer-vision + 3D-viewer system that turns broadcast or sports-cam
+hockey footage into a tactical decision-training tool. Built by a
+professional hockey player and skating coach as a personal-development
+project — not a generic analytics platform.
+
+> **Split note (2026-05-11):** the body-mechanics / single-skater
+> technique analysis half of this project was spun out into a separate
+> repo: [Hockey_Vision_AI](https://github.com/OsikDerek/Hockey_Vision_AI).
+> Earlier git history of this repo includes the technique pipeline.
 
 ## The vision
 
@@ -28,27 +33,25 @@ viewer, Quiz Mode — is a stepping stone toward that.
   the reveal shows the actual decision + the AI's evaluation. Toggle
   between Top-Down (tactical pattern-reading) and Player-POV (the
   end-goal training feel) with the V key.
-- **Source video side-by-side** — togglable panel that loads the raw
+- **Source-video side-by-side** — togglable panel that loads the raw
   clip and scrub-locks to the 3D playback, for verifying what the
   tracker actually saw vs what the system rendered.
-- **Two analysis pipelines** through one `main.py`:
-  - `--technique <skill>` — single-skater drill / practice analysis
-    with 10 YAML-defined techniques (forward_stride, crossover,
-    wrist_shot, snap_shot, one_timer, stickhandling, hockey_stop,
-    backwards_skating, transitions, edge_work)
-  - `--game-analysis` — multi-player game film with zone detection,
-    possession tracking, and 7 decision detectors (shot_vs_pass,
-    zone_entry, breakout, odd_man_rush, forecheck, defensive_play,
-    missed_opportunity)
+- **Game-analysis pipeline** (`src/game_analysis/`) — multi-player
+  tracking via HockeyAI YOLOv8 + ByteTrack, zone detection, possession
+  with hysteresis, BGR-median + Lab dual-mode team classifier, 7
+  decision detectors (shot_vs_pass, zone_entry, breakout, odd_man_rush,
+  forecheck, defensive_play, missed_opportunity).
 - **Headless test harness** — Playwright drives a real Chromium against
   the viewer, screenshots each phase of Quiz Mode, catches regressions
-  without needing a human in the loop (`scripts/test_quiz_browser.py`).
+  without needing a human in the loop
+  (`scripts/test_quiz_browser.py`, `scripts/test_motion_smoothness.py`,
+  `scripts/test_source_video_panel.py`).
 
 ## Active development focus
 
-**Tracking/calibration accuracy on cropped junior footage.** The
+**Tracking + calibration accuracy on cropped junior footage.** The
 3D-viewer scene is only as good as the positions JSON feeding it.
-Recent batches have been:
+Recent batches:
 
 - Per-track EMA position smoothing
 - Track-ID stitching to collapse ByteTrack ghost identities
@@ -66,24 +69,20 @@ prioritized work queue.
 # 1. Install
 pip install -r requirements.txt
 
-# 2. Get a model (one-time)
+# 2. Get the HockeyAI model weights (one-time)
 python -c "from huggingface_hub import hf_hub_download; \
   hf_hub_download('SimulaMet-HOST/HockeyAI', 'HockeyAI_model_weight.pt', \
   local_dir='models')"
 
-# 3. Run game analysis to produce a positions JSON
+# 3. Run game analysis on a clip → produces output/<name>_positions.json
 python main.py --game-analysis -i data/raw_videos/your_clip.mp4
 
 # 4. Launch the 3D viewer (auto-opens browser to the latest JSON)
 python scripts/serve_viewer.py
 ```
 
-For technique analysis on a single skater:
-```bash
-python main.py -i drill.mp4 --technique forward_stride --auto-crop
-python main.py -i drill.mp4 --technique crossover --auto-crop --mode crossover
-python main.py -i shot.mp4 --technique wrist_shot --auto-crop
-```
+For technique / body-mechanics analysis on a single skater, use the
+sister repo: [Hockey_Vision_AI](https://github.com/OsikDerek/Hockey_Vision_AI).
 
 ## Test bed
 
@@ -99,21 +98,14 @@ rink:
 ## Architecture
 
 ```
-main.py              ─→  HockeyAI YOLOv8 + ByteTrack  ─→  positions JSON  ─→  Three.js viewer
-                         + RinkCalibrator (homography)                       (Quiz Mode + POV)
-                         + 7 decision detectors
+main.py  ─→  HockeyAI YOLOv8 + ByteTrack  ─→  positions JSON  ─→  Three.js viewer
+              + RinkCalibrator (homography)                       (Quiz Mode + POV)
+              + 7 decision detectors
 ```
-
-The two analysis modes share the pose/tracking stack but produce
-different output:
-- **Technique mode** → annotated video + report.txt + report.json
-- **Game-analysis mode** → annotated video + positions JSON (the
-  NHL EDGE-shaped per-frame data that drives the 3D viewer)
 
 ## Tech stack
 
 - **Detection / tracking:** HockeyAI YOLOv8 (7-class), ByteTrack
-- **Pose:** MediaPipe (33-landmark) + YOLOv8-pose backend
 - **Calibration:** OpenCV homography + landmark detection (CV-based
   blue/red line detector, faceoff-dot detector via YOLO)
 - **3D viewer:** Three.js (vanilla, no framework). Per-render-tick
@@ -125,7 +117,7 @@ different output:
 
 ```
 Hockey_AI/
-├── main.py                          # CLI entry point
+├── main.py                          # CLI entry point (game-analysis only)
 ├── viewer/                          # ★ 3D viewer (centerpiece)
 │   ├── index.html
 │   ├── viewer.js                    # render loop, smoothing, POV
@@ -137,20 +129,22 @@ Hockey_AI/
 │   ├── serve_viewer.py              # static HTTP for the viewer
 │   ├── test_quiz_browser.py         # headless Quiz Mode test
 │   ├── test_motion_smoothness.py    # headless smoothness probe
+│   ├── test_source_video_panel.py   # headless source-video test
 │   ├── prepare_web_video.py         # transcode raw video → web-playable
 │   └── ...
 ├── src/
-│   ├── pose_estimator.py
-│   ├── technique_engine.py
-│   ├── object_tracker.py
+│   ├── video_io.py                  # OpenCV wrappers (shared util)
+│   ├── utils.py                     # small helpers (shared util)
 │   └── game_analysis/               # game-mode pipeline
-│       ├── game_tracker.py
-│       ├── rink_calibrator.py
-│       ├── play_evaluator.py
-│       └── decisions/               # decision detectors
+│       ├── game_tracker.py          # Multi-player tracking
+│       ├── rink_calibrator.py       # Ice-coordinate calibration
+│       ├── play_evaluator.py        # Decision scoring + play-style bias
+│       ├── game_annotator.py        # Overlay rendering
+│       ├── game_report.py
+│       ├── broadcast_filter.py
+│       └── decisions/               # Decision detectors
 ├── knowledge_base/
-│   ├── techniques/                  # 10 technique YAML files
-│   └── game_situations/             # decision evaluation criteria
+│   └── game_situations/             # Decision evaluation YAML
 ├── models/                          # weights (not in git)
 ├── data/raw_videos/                 # input clips (not in git)
 └── output/                          # generated output (not in git)
@@ -167,27 +161,7 @@ Hockey_AI/
 - Optional: NVIDIA GPU. Author's desktop (RTX 2080 Super) runs the
   game-analysis pipeline at ~18-19 fps tracking.
 
-## Adding your own knowledge
-
-### New technique
-Drop a YAML file in `knowledge_base/techniques/`:
-```yaml
-technique:
-  name: my_technique
-  detection:
-    detector: FrameByFrame
-  checks:
-    knee_angle:
-      angle_function: knee_angle
-      good_range: [95, 125]
-      feedback:
-        good: "Great knee bend"
-        poor: "Bend your knees more"
-      drills:
-        poor:
-          - name: "Wall Sits"
-            cue: "Hold for 30 seconds"
-```
+## Adding decision types or play styles
 
 ### New game decision type
 1. Add a detector in `src/game_analysis/decisions/`
@@ -202,10 +176,13 @@ carries, physical favors dump-and-chase, etc.
 ## About
 
 Built by Derek Osik — professional hockey player, skating coach, and
-software engineer. The project is a personal-development tool first;
+software engineer. This project is a personal-development tool first;
 the goal is to use it on my own game film to train my decision-making
 the same way pros use video review, but in a richer 3D simulator
 environment that VR will eventually unlock.
+
+**Companion repo:** [Hockey_Vision_AI](https://github.com/OsikDerek/Hockey_Vision_AI)
+(single-skater body-mechanics / technique CV).
 
 If you're another hockey player, coach, or CV person poking around:
 the issues + roadmap in
