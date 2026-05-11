@@ -4,6 +4,21 @@ This file exists so a Claude Code session on a different machine can pick
 up exactly where we left off. Everything important is either in this
 directory or in the repo's git history.
 
+## Repo split note (2026-05-11)
+
+This repo used to contain BOTH the body-mechanics CV (single-skater
+pose + technique rubrics) AND the decision-simulator (game film → 3D
+viewer + Quiz). On 2026-05-11 they were split:
+
+- **This repo (`Hockey_AI`)** retains: game-analysis pipeline, 3D
+  viewer, Quiz Mode, simulator roadmap. Decision-training half.
+- **Sister repo [`Hockey_Vision_AI`](https://github.com/OsikDerek/Hockey_Vision_AI)**:
+  body-mechanics half. Pose estimator, technique engine, 10 YAML
+  rubrics, drill library, crossover/stride detection.
+
+Earlier git history in this repo still contains the body-mechanics
+code. The split commit is `d6e5497`.
+
 ## TL;DR for the next Claude session
 
 1. **If you're the `continue-implementation` cron routine (no user
