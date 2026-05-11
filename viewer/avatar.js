@@ -128,6 +128,33 @@ export function createAvatar(team, isGoalie = false) {
     );
     pad.position.set(0, heightFt - 3.4, 0.7);
     root.add(pad);
+
+    // Goalie stick: wide paddle on the ice + short angled shaft up to glove.
+    // Distinct from player stick — paddle is roughly 2x as wide as a player
+    // blade, sits centered in front of the pad rather than off to the side,
+    // and the shaft is shorter + tilted more upright (goalies stand in a
+    // crouch with hands at hip height, not extended out).
+    const goalieStick = new THREE.Group();
+    const paddle = new THREE.Mesh(
+      new THREE.BoxGeometry(3.0, 0.18, 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.55 }),
+    );
+    paddle.position.set(0, 0.10, 1.9);
+    paddle.castShadow = true;
+    paddle.name = "goaliePaddle";
+    goalieStick.add(paddle);
+    const goalieShaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.13, 3.4, 6),
+      new THREE.MeshStandardMaterial({ color: STICK_COLOR }),
+    );
+    // Angle the shaft forward-up from the pad to the paddle: ~45° tilt
+    // so it visually connects the goalie's body to the paddle on the ice.
+    goalieShaft.rotation.x = Math.PI / 4;
+    goalieShaft.position.set(0, 1.3, 0.85);
+    goalieShaft.castShadow = true;
+    goalieStick.add(goalieShaft);
+    root.add(goalieStick);
+    root.userData.goalieStick = goalieStick;
   }
 
   // Stash limb refs for skating animation

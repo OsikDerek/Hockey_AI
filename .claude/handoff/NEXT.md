@@ -40,14 +40,7 @@ Action items (don't start unprompted — Derek may want to pair on this):
 - Worth re-running the pipeline with --debug-calibration to see what
   fraction of frames have what landmark counts.
 
-### 1. Goalie stick rendering parity
-After the blade restyle in `viewer/avatar.js`, player sticks read as
-sticks but goalies still only have a "pad" block in front of them. Give
-goalies a goalie stick (wider paddle, lower angle, distinct color) so
-the pose vocabulary is consistent. **Verify** with headless harness on
-livebarn_cropped — goalies are visible at most quiz pauses.
-
-### 2. Headless puck-placement QA across all 7 events
+### 1. Headless puck-placement QA across all 7 events
 Extend `scripts/test_quiz_browser.py` (or write a sibling
 `scripts/render_play_frames.py`-style script) that loads
 livebarn_cropped, walks through each renderable quiz event, screenshots
