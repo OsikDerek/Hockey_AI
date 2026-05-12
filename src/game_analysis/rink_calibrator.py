@@ -36,7 +36,7 @@ import cv2
 import numpy as np
 
 from .rink_lines import (
-    detect_rink_lines, detect_rink_boards,
+    detect_rink_lines, detect_rink_boards, detect_rink_edges_via_row_brightness,
     line_from_segment, line_intersection,
 )
 
@@ -335,6 +335,36 @@ class RinkCalibrator:
             return
         self._homography_correspondences = int(len(ice_pts))
 
+    def _detect_boards_cached(self, frame: np.ndarray) -> dict:
+        """Detect rink top/bottom edges. Cached for the lifetime of one
+        frame so we don't run the detector twice in case downstream call
+        sites need it again.
+
+        Combines two detectors:
+        - `detect_rink_boards`: the original ice-blob approach. Works on
+          tight broadcast crops but returns nothing on wide-pano fixed-cam
+          clips (overhead rafters / lights get merged into the "ice" blob).
+        - `detect_rink_edges_via_row_brightness`: row-density fallback
+          that finds the brightest horizontal band of low-saturation
+          pixels. Much more reliable on LiveBarn-style wide-pano views.
+
+        We always run the blob detector first, then fill in any missing
+        edge from the row-brightness detector. Never overrides a
+        successful blob detection.
+        """
+        if getattr(self, "_boards_cache_key", None) == id(frame):
+            return self._boards_cache_val
+        boards = detect_rink_boards(frame)
+        if boards["top"] is None or boards["bottom"] is None:
+            alt = detect_rink_edges_via_row_brightness(frame)
+            if boards["top"] is None and alt["top"] is not None:
+                boards["top"] = alt["top"]
+            if boards["bottom"] is None and alt["bottom"] is not None:
+                boards["bottom"] = alt["bottom"]
+        self._boards_cache_key = id(frame)
+        self._boards_cache_val = boards
+        return boards
+
     def _extract_line_correspondences(self, frame: np.ndarray) -> list:
         """B2: detect rink lines + boards, intersect them for point correspondences.
 
@@ -355,7 +385,12 @@ class RinkCalibrator:
         if not rink_lines["blue"] and not rink_lines["red"]:
             return []
 
-        boards = detect_rink_boards(frame)
+        # Boards: shared cache with the synthetic-goal-line anchors so we
+        # don't run the detectors twice per frame. The fallback to
+        # detect_rink_edges_via_row_brightness happens inside
+        # _detect_boards_cached for wide-pano clips where the ice-blob
+        # path returns nothing.
+        boards = self._detect_boards_cached(frame)
         # Determine which detected board is "ice y=0" vs "y=85" using the
         # similarity prior. Project the predicted top + bottom board
         # midpoints, then assign whichever detected board is closer to each.
