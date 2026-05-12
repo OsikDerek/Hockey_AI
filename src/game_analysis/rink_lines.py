@@ -46,6 +46,18 @@ RED_HSV_HI_1 = (15, 255, 255)
 RED_HSV_LO_2 = (165, 40, 40)
 RED_HSV_HI_2 = (180, 255, 255)
 
+# Lower saturation thresholds used when detection is restricted to the
+# ice region (via a band mask). Inside the ice region we can be much
+# more permissive because bleacher / jersey / advertising noise has
+# already been filtered out — the only blue/red things left should
+# actually be painted rink lines (faded though they may be).
+BLUE_HSV_LO_INSIDE_ICE = (85, 12, 80)
+BLUE_HSV_HI_INSIDE_ICE = (140, 255, 255)
+RED_HSV_LO_1_INSIDE_ICE = (0, 18, 60)
+RED_HSV_HI_1_INSIDE_ICE = (18, 255, 255)
+RED_HSV_LO_2_INSIDE_ICE = (162, 18, 60)
+RED_HSV_HI_2_INSIDE_ICE = (180, 255, 255)
+
 # Pixel-line acceptance — orientation-agnostic. Broadcast cams put rink
 # lines at any angle in pixel space (near-horizontal on flat-angle cams,
 # near-vertical on overhead). The homography reproj-error gate and
@@ -56,27 +68,56 @@ HOUGH_MAX_GAP_PX = 30
 CLUSTER_DIST_FRAC = 0.04             # cluster lines within 4% of frame size
 
 
-def detect_rink_lines(frame: np.ndarray) -> dict:
+def detect_rink_lines(
+    frame: np.ndarray,
+    ice_band: Optional[tuple] = None,
+) -> dict:
     """Find blue + red rink lines in the frame.
+
+    Args:
+        frame: BGR image.
+        ice_band: optional (top_y, bottom_y) tuple bounding the ice region
+            vertically in pixel space. When provided, line detection is
+            restricted to inside that band AND uses a more permissive HSV
+            saturation threshold (the bleacher/jersey/advertising noise
+            outside the ice has already been excluded, so faded paint on
+            junior LiveBarn-style clips passes the lower threshold without
+            false positives). When None, falls back to the original
+            full-frame detection with stricter HSV.
 
     Returns:
         {
           "blue": [{p1, p2, mid_x, length, angle_rad}, ...],
           "red":  [...],
         }
-
-    Each line entry's coordinates are in pixel space. mid_x is the
-    average x of the two endpoints — used by callers for matching to
-    ice-line predictions. Lines are sorted by mid_x ascending.
     """
     empty = {"blue": [], "red": []}
     if frame is None or frame.size == 0 or frame.ndim < 3:
         return empty
 
+    h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    blue_mask = cv2.inRange(hsv, BLUE_HSV_LO, BLUE_HSV_HI)
-    red_mask = (cv2.inRange(hsv, RED_HSV_LO_1, RED_HSV_HI_1)
-                | cv2.inRange(hsv, RED_HSV_LO_2, RED_HSV_HI_2))
+
+    if ice_band is not None:
+        top_y, bot_y = ice_band
+        top_y = max(0, int(top_y))
+        bot_y = min(h, int(bot_y))
+        if bot_y - top_y < 10:
+            return empty
+        # Inside-ice mode: low-saturation thresholds + restrict to the band.
+        blue_mask = cv2.inRange(hsv, BLUE_HSV_LO_INSIDE_ICE, BLUE_HSV_HI_INSIDE_ICE)
+        red_mask = (
+            cv2.inRange(hsv, RED_HSV_LO_1_INSIDE_ICE, RED_HSV_HI_1_INSIDE_ICE)
+            | cv2.inRange(hsv, RED_HSV_LO_2_INSIDE_ICE, RED_HSV_HI_2_INSIDE_ICE)
+        )
+        band_mask = np.zeros((h, w), dtype=np.uint8)
+        band_mask[top_y:bot_y, :] = 255
+        blue_mask = cv2.bitwise_and(blue_mask, band_mask)
+        red_mask = cv2.bitwise_and(red_mask, band_mask)
+    else:
+        blue_mask = cv2.inRange(hsv, BLUE_HSV_LO, BLUE_HSV_HI)
+        red_mask = (cv2.inRange(hsv, RED_HSV_LO_1, RED_HSV_HI_1)
+                    | cv2.inRange(hsv, RED_HSV_LO_2, RED_HSV_HI_2))
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
@@ -84,7 +125,6 @@ def detect_rink_lines(frame: np.ndarray) -> dict:
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
 
-    h, w = frame.shape[:2]
     min_len = max(50, int(min(w, h) * MIN_LINE_LEN_FRAC))
 
     blue = _hough_any_orientation(blue_mask, min_len)

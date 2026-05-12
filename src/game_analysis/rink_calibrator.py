@@ -335,6 +335,19 @@ class RinkCalibrator:
             return
         self._homography_correspondences = int(len(ice_pts))
 
+    @staticmethod
+    def _board_y_band(boards: dict) -> Optional[tuple]:
+        """Return (top_y, bottom_y) bracket of the detected ice in pixel
+        space, padding outward by 6 px so the band edges don't clip the
+        actual painted lines (which sit ~2 px wide near the boards in
+        these clips). None when either board edge wasn't detected."""
+        if boards["top"] is None or boards["bottom"] is None:
+            return None
+        top_y = min(boards["top"]["p1"][1], boards["top"]["p2"][1])
+        bot_y = max(boards["bottom"]["p1"][1], boards["bottom"]["p2"][1])
+        pad = 6
+        return (max(0, top_y - pad), bot_y + pad)
+
     def _detect_boards_cached(self, frame: np.ndarray) -> dict:
         """Detect rink top/bottom edges. Cached for the lifetime of one
         frame so we don't run the detector twice in case downstream call
@@ -381,16 +394,17 @@ class RinkCalibrator:
         if self._scale_px_per_ft is None or self._origin_px is None:
             return []
 
-        rink_lines = detect_rink_lines(frame)
+        # Detect boards FIRST so we can constrain line detection to the
+        # ice region. Inside-ice line detection uses a much lower HSV
+        # saturation threshold (junior LiveBarn paint is faded), which
+        # would false-positive all over jersey/bleacher noise without
+        # the band mask.
+        boards = self._detect_boards_cached(frame)
+        ice_band = self._board_y_band(boards)
+
+        rink_lines = detect_rink_lines(frame, ice_band=ice_band)
         if not rink_lines["blue"] and not rink_lines["red"]:
             return []
-
-        # Boards: shared cache with the synthetic-goal-line anchors so we
-        # don't run the detectors twice per frame. The fallback to
-        # detect_rink_edges_via_row_brightness happens inside
-        # _detect_boards_cached for wide-pano clips where the ice-blob
-        # path returns nothing.
-        boards = self._detect_boards_cached(frame)
         # Determine which detected board is "ice y=0" vs "y=85" using the
         # similarity prior. Project the predicted top + bottom board
         # midpoints, then assign whichever detected board is closer to each.
