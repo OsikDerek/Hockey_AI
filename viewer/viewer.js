@@ -953,12 +953,30 @@ function deriveSourceVideoUrl(jsonPath) {
   // scripts/prepare_web_video.py). Original-source mp4s often use the
   // mpeg4 / Simple Profile codec from sports-cam recorders, which
   // browsers (especially headless Chromium) refuse to decode.
-  const variants = [
-    base,
-    `${base}_60sec`,
-    base.replace(/_cropped$/, "_60sec_cropped"),
-    base.replace(/_cropped$/, ""),
-  ];
+  // Strip pipeline version suffixes (e.g. "_v4", "_v12") so a JSON named
+  // `livebarn_cropped_v4_positions.json` still finds the source video
+  // `livebarn_60sec_cropped.mp4`. The source video doesn't get re-named
+  // per pipeline run; only the JSON does.
+  const cleanedBase = base.replace(/_v\d+$/, "");
+
+  const seeds = [cleanedBase];
+  if (cleanedBase !== base) seeds.push(base);
+
+  const variants = new Set();
+  for (const seed of seeds) {
+    variants.add(seed);
+    variants.add(`${seed}_60sec`);
+    variants.add(seed.replace(/_cropped$/, "_60sec_cropped"));
+    variants.add(seed.replace(/_cropped$/, ""));
+    // Handle base seeds like `livebarn_cropped` by also trying the
+    // common "name_60sec_cropped" shape used by raw LiveBarn exports.
+    if (!seed.includes("_60sec")) {
+      const parts = seed.split("_");
+      if (parts.length >= 2) {
+        variants.add(`${parts[0]}_60sec_${parts.slice(1).join("_")}`);
+      }
+    }
+  }
   const urls = [];
   for (const v of variants) urls.push(`/data/raw_videos/${v}.web.mp4`);
   for (const v of variants) urls.push(`/data/raw_videos/${v}.mp4`);
