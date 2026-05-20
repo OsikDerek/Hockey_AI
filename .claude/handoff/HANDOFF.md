@@ -4,6 +4,28 @@ This file exists so a Claude Code session on a different machine can pick
 up exactly where we left off. Everything important is either in this
 directory or in the repo's git history.
 
+## Footage strategy (2026-05-12) — IMPORTANT
+
+**Target NHL-broadcast-style footage as the primary input.** The
+HockeyAI YOLO model and all hockey rink-registration research are
+built and benchmarked on the standard elevated press-box broadcast
+camera. Junior LiveBarn pano footage (faded paint, extreme wide-angle
+corner mount, fixed cam) is the hardest possible input and was the
+root cause of weeks of calibration pain — its "99% in-rink" score
+under the loose metric masked severe across-rink y-compression.
+
+Minor-pro / college / juniors / any level are all acceptable **as long
+as the footage style closely matches NHL broadcast** (elevated side
+angle, rink fills a predictable portion of frame, crisp paint).
+
+`livebarn_60sec_cropped.mp4` is demoted from "primary test bed" to
+"hard-case adaptation target — later." Primary test clips are now the
+NHL-broadcast clips in `data/raw_videos/` (`wpg_pp_60sec.mp4`,
+`rush_30sec_clip.mp4`, etc.).
+
+Reasoning: features built on untrustworthy tracking are useless.
+Switch to reliable footage, get tracking accurate, THEN build features.
+
 ## Repo split note (2026-05-11)
 
 This repo used to contain BOTH the body-mechanics CV (single-skater

@@ -6,12 +6,17 @@ the top item that's autonomous-safe — no permissions or user input — and
 make progress. Mark items done by deleting them from this file (then
 commit + push, per the push-as-we-work routine).
 
-Last user-driven session: commit `1500f7b` (single-puck render fix).
-Active frontier: avatar placement accuracy on livebarn_cropped, with
-visual comparison in the viewer. Test bed: `livebarn_60sec_cropped.mp4`
-→ `output/livebarn_cropped_positions.json` (97.5% in-rink, 7/7
-renderable quiz events). Server: `py -3.12 scripts/serve_viewer.py` or
+Active frontier: tracking accuracy. **As of 2026-05-12 the primary
+test footage is NHL-broadcast-style clips, NOT junior LiveBarn pano**
+— see "Footage strategy" in HANDOFF.md. Use `wpg_pp_60sec.mp4` /
+`rush_30sec_clip.mp4` as test beds. `livebarn_60sec_cropped.mp4` is a
+deferred hard-case. Server: `py -3.12 scripts/serve_viewer.py` or
 `.venv/Scripts/python.exe scripts/serve_viewer.py`.
+
+Recent calibration work (commits through `da128c6`): improved
+line/board detection + foot-point projection lifted livebarn_cropped
+y-p90 from 27.6 → 64.6 ft. Next: validate on NHL-broadcast footage,
+which is the footage type the whole CV stack was built for.
 
 ## Queued (in priority order)
 
