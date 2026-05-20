@@ -31,6 +31,23 @@ class TrackedObject:
     def area(self) -> float:
         return self.width * self.height
 
+    @property
+    def foot_point(self) -> tuple:
+        """Bottom-center of the bbox — the point where the player's
+        skates contact the ice. This is the geometrically correct point
+        to project through an ice-plane homography: the bbox CENTER sits
+        at torso height (~3 ft up), and projecting an above-ice point
+        through a ground-plane homography places the player offset
+        toward the camera. For a side-viewing rink camera that offset
+        pushes far-side players toward mid-rink — a direct contributor
+        to across-rink position compression.
+
+        Matches the SOTA approach (Multi-Player Tracking in Ice Hockey
+        with Homographic Projections, arXiv:2405.13397): project the
+        foot keypoint, not the box center.
+        """
+        return ((self.bbox[0] + self.bbox[2]) / 2.0, self.bbox[3])
+
 
 @dataclass
 class FrameContext:

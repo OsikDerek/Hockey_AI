@@ -149,7 +149,13 @@ def run_game_analysis_mode(args, meta):
                                frame=frame)
         if rink_calibrator.is_calibrated:
             for obj in objects:
-                obj.ice_xy = rink_calibrator.pixel_to_ice(obj.center)
+                # Project the FOOT point (bottom-center of bbox), not the
+                # bbox center. The center is at torso height; projecting
+                # an above-ice point through the ice-plane homography
+                # offsets the player toward the camera. The puck is
+                # effectively on the ice already, but foot_point is still
+                # correct for it (its bbox is tiny).
+                obj.ice_xy = rink_calibrator.pixel_to_ice(obj.foot_point)
 
         # Shootout-like context: shooter(s) + opposing goalie, no defensive
         # structure. Hysteresis tolerates single-frame goalie dropouts so a
