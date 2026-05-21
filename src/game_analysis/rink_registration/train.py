@@ -41,6 +41,10 @@ def main(argv):
     p.add_argument("--imgsz", type=int, default=960)
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--name", default="rink_kp_synth")
+    p.add_argument("--project", default=None,
+                   help="output parent dir for runs. Default keeps runs in "
+                        "the repo; pass a non-OneDrive path to avoid sync "
+                        "churn during training.")
     p.add_argument("--device", default="0", help="GPU id, or 'cpu'")
     p.add_argument("--resume", action="store_true")
     args = p.parse_args(argv)
@@ -58,7 +62,7 @@ def main(argv):
     print(f"  epochs: {args.epochs}  imgsz: {args.imgsz}  batch: {args.batch}")
 
     model = YOLO(args.base)
-    model.train(
+    train_kwargs = dict(
         data=str(data_path),
         epochs=args.epochs,
         imgsz=args.imgsz,
@@ -66,6 +70,13 @@ def main(argv):
         device=args.device,
         name=args.name,
         resume=args.resume,
+        cache=False,          # don't pre-cache the dataset to disk/RAM
+        save_period=-1,       # only save best.pt + last.pt, not per-epoch
+    )
+    if args.project:
+        train_kwargs["project"] = args.project
+    model.train(
+        **train_kwargs,
         # Flip augmentation OFF — would scramble left/right keypoint identity.
         fliplr=0.0,
         flipud=0.0,
