@@ -46,6 +46,9 @@ def main(argv):
                         "the repo; pass a non-OneDrive path to avoid sync "
                         "churn during training.")
     p.add_argument("--device", default="0", help="GPU id, or 'cpu'")
+    p.add_argument("--workers", type=int, default=8,
+                   help="dataloader workers. Lower (4) reduces system-memory "
+                        "commit / pagefile pressure during training.")
     p.add_argument("--resume", action="store_true")
     args = p.parse_args(argv)
 
@@ -72,6 +75,7 @@ def main(argv):
         resume=args.resume,
         cache=False,          # don't pre-cache the dataset to disk/RAM
         save_period=-1,       # only save best.pt + last.pt, not per-epoch
+        workers=args.workers,
     )
     if args.project:
         train_kwargs["project"] = args.project
