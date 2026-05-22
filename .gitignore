@@ -7,8 +7,13 @@ models/*.task
 models/*.pt
 *.pt
 
-# Output
-output/
+# Output (ignore the contents, but keep the directory traversable so the
+# reproducible-test fixtures below can be re-included).
+output/*
+# ...except the hand-annotated ground truth + the scorecard baseline:
+# these are test fixtures the scorecard depends on.
+!output/_gt/
+!output/_scorecard_baseline.json
 
 # Python
 __pycache__/

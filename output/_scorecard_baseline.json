@@ -1,0 +1,17 @@
+{
+ "puck_smoothness": 0.994,
+ "puck_implausible": 2,
+ "puck_present": 351,
+ "player_smoothness": 0.98,
+ "player_implausible": 46,
+ "puck_err_p50_ft": 1.65,
+ "puck_err_p90_ft": 25.07,
+ "puck_err_max_ft": 37.76,
+ "puck_scored": 32,
+ "puck_missed": 2,
+ "player_recall_pct": 57.8,
+ "player_marks_gt": 275,
+ "calib_reproj_p50_ft": 0.65,
+ "calib_reproj_p90_ft": 1.07,
+ "keyframes_uncalibrated": 1
+}
