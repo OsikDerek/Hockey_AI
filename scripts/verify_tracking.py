@@ -152,7 +152,7 @@ def _draw_topdown(frame_data, w, h, flip_x=False, flip_y=False):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clip", default="caufield_b3",
+    ap.add_argument("--clip", default="caufield_trim_b3",
                     help="positions JSON basename (without _positions.json)")
     args = ap.parse_args(argv)
 
