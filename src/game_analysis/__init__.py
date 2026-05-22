@@ -196,11 +196,8 @@ def run_game_analysis_mode(args, meta):
         if is_shootout_like:
             is_gameplay = True
 
-        # Zone detection
-        zone = zone_detector.update(objects, puck, meta["width"])
-
-        # Possession detection
-        possession_id = possession_detector.update(puck, players)
+        # Zone + possession are deferred to pass 1b (below), so they consume
+        # the motion-filtered puck rather than the raw streaming detection.
 
         # Team classification
         if is_gameplay:
@@ -225,8 +222,8 @@ def run_game_analysis_mode(args, meta):
             goalies=goalies,
             referees=referees,
             rink_landmarks=rink_landmarks,
-            zone=zone,
-            possession_player_id=possession_id,
+            zone=None,                  # set in pass 1b
+            possession_player_id=None,  # set in pass 1b
             is_gameplay=is_gameplay,
             is_camera_cut=is_camera_cut,
             is_shootout_like=is_shootout_like,
@@ -234,11 +231,6 @@ def run_game_analysis_mode(args, meta):
             ice_homography=rink_calibrator.has_homography,
             team_assignments=dict(team_assignments),
         )
-
-        # Feed to decision detectors
-        if is_gameplay:
-            for det in decision_detectors.values():
-                det.add_frame(ctx)
 
         analysis.frame_contexts.append(ctx)
         frame_data.append(frame)
@@ -250,8 +242,6 @@ def run_game_analysis_mode(args, meta):
             analysis.camera_cuts += 1
         if is_gameplay:
             analysis.gameplay_frames += 1
-        if zone:
-            analysis.zone_time[zone] = analysis.zone_time.get(zone, 0) + (1.0 / meta["fps"])
 
         # Progress
         if frames_processed % 100 == 0:
@@ -261,9 +251,8 @@ def run_game_analysis_mode(args, meta):
             ts = format_timestamp(frame_idx, meta["fps"])
             n_players = len(players)
             puck_str = "PUCK" if puck else "no puck"
-            zone_str = zone or "?"
             print(f"  [{ts}] {pct:.0f}% ({fps_actual:.1f} fps) | "
-                  f"{n_players} players, {puck_str}, zone={zone_str}")
+                  f"{n_players} players, {puck_str}")
 
     analysis.total_frames = frames_processed
     pass1_time = time.time() - start_time
@@ -280,6 +269,22 @@ def run_game_analysis_mode(args, meta):
     # over the full buffered trajectory before rendering + JSON export.
     from .motion_filter import apply_motion_filter
     apply_motion_filter(analysis, meta["fps"])
+
+    # ── Pass 1b: Zone / possession / decisions on the cleaned puck ──
+    # Deferred from pass 1 so possession, zone classification, and every
+    # decision detector consume the motion-filtered puck trajectory rather
+    # than the raw per-frame streaming detection.
+    print("Pass 1b: Zone + possession + decisions on the filtered puck...")
+    for ctx in analysis.frame_contexts:
+        ctx.zone = zone_detector.update(ctx.objects, ctx.puck, meta["width"])
+        ctx.possession_player_id = possession_detector.update(
+            ctx.puck, ctx.players)
+        if ctx.zone:
+            analysis.zone_time[ctx.zone] = (
+                analysis.zone_time.get(ctx.zone, 0) + (1.0 / meta["fps"]))
+        if ctx.is_gameplay:
+            for det in decision_detectors.values():
+                det.add_frame(ctx)
 
     # Team classification summary
     team_summary = team_classifier.summary()
