@@ -122,28 +122,22 @@ buildCameras();
 // ── Avatar registry
 //
 // Each entry holds:
-//   mesh           — the THREE.Group
-//   targetPos      — latest sampled ice_xy from the data ({x, y})
-//   renderedPos    — last position drawn this RAF tick ({x, y})
-//   lastFrameIdx   — frame index when targetPos was last updated
+//   mesh         — the THREE.Group
+//   targetPos    — this data frame's ice_xy sample ({x, y})
+//   nextPos      — the next data frame's ice_xy for the same track, or null
+//   glide        — true when targetPos→nextPos is a plausible skater move
+//   renderedPos  — position drawn this RAF tick ({x, y})
+//   lastFrameIdx — data frame index targetPos/nextPos belong to
 //
-// The split between targetPos and renderedPos is what lets us decouple
-// the 30 fps data stream from the 60 fps render loop. Each render tick
-// we lerp renderedPos toward targetPos with an exponential decay, which
-// turns the discrete sample stream into a continuous glide. The
-// smoothing strength is governed by POS_SMOOTHING_TAU below.
+// Each render tick the avatar is placed at the exact linear interpolation
+// between targetPos and nextPos by the fractional playback frame index
+// (see smoothMotion). The data is already motion-filtered upstream, so
+// this is both exact (zero lag vs the verification view) and smooth.
 const avatars = new Map();
 
-// Render-time smoothing time constants. Smaller tau = snappier (less
-// visual lag) but lets through more raw jitter. ~80ms is a good balance
-// for skaters; pucks move faster so they get a tighter tau.
-const PLAYER_SMOOTHING_TAU = 0.08;   // seconds
-const PUCK_SMOOTHING_TAU = 0.05;     // seconds
-
-// Outlier-rejection caps. Real hockey skater top speed ~40 ft/s; pucks
-// ~120 ft/s. Caps are set slightly above so genuine fast skating /
-// hard shots aren't filtered out. Data exceeding these is almost always
-// an id-confusion teleport or a puck/skate-blade mislabel.
+// Glide-vs-snap caps. A frame-to-frame move faster than this is not a real
+// skater / puck — it is a ByteTrack id-reuse or a mislabel — so the avatar
+// holds and snaps at the frame boundary instead of sliding across the rink.
 const MAX_PLAYER_FT_PER_SEC = 55;
 const MAX_PUCK_FT_PER_SEC = 150;
 
@@ -181,7 +175,9 @@ function getOrCreateAvatar(trackId, team, isGoalie = false) {
   scene.add(mesh);
   const entry = {
     mesh,
-    targetPos: null,    // latest sampled position from data
+    targetPos: null,    // this data frame's sampled position
+    nextPos: null,      // next data frame's position for the same track
+    glide: false,       // interpolate target->next this frame?
     renderedPos: null,  // last drawn position
     lastFrameIdx: -1,
   };
@@ -189,11 +185,13 @@ function getOrCreateAvatar(trackId, team, isGoalie = false) {
   return entry;
 }
 
-// Puck state. Like avatars, split into target (from data) + rendered
-// (lerped). lastUpdateFrameIdx supports the persistence window so we
-// don't strobe through short detection gaps.
+// Puck state. Like avatars: target = this frame's sample, next = the next
+// frame's, interpolated by the fractional frame index. lastUpdateFrameIdx
+// supports the persistence window so we don't strobe through short gaps.
 const puckState = {
   targetPos: null,        // {x, y} of latest fr.puck or carrier snap
+  nextPos: null,          // {x, y} of the next frame's puck sample
+  glide: false,
   renderedPos: null,      // {x, y} actually drawn this tick
   lastUpdateFrameIdx: -1, // frame_idx of last fr.puck OR carrier-snap update
 };
@@ -203,6 +201,8 @@ function clearAvatars() {
   avatars.clear();
   // Reset puck state too; otherwise old position leaks across loads.
   puckState.targetPos = null;
+  puckState.nextPos = null;
+  puckState.glide = false;
   puckState.renderedPos = null;
   puckState.lastUpdateFrameIdx = -1;
   puck.visible = false;
@@ -439,34 +439,29 @@ function applyFrame(fr) {
     const team = p.team || data.dominantTeamFor(p.track_id);
     const entry = getOrCreateAvatar(p.track_id, team, isGoalie);
     const pos = { x: p.ice_x, y: p.ice_y };
-    const frameDelta = entry.lastFrameIdx >= 0
-      ? Math.max(1, currentFrameIdx - entry.lastFrameIdx)
-      : 1;
-    const TELEPORT_FRAMES = Math.round(fps * 0.5); // >0.5s gap = treat as teleport
-    const firstSighting = !entry.targetPos;
-    const isTeleport = firstSighting || frameDelta > TELEPORT_FRAMES;
 
-    if (isTeleport) {
-      // Snap both target and rendered position; no smoothing across a
-      // genuine reappearance. Reset cycle phase so legs don't jolt.
-      entry.targetPos = pos;
+    // The positions JSON is already motion-filtered upstream, so it is
+    // authoritative: the avatar is placed by interpolating exactly between
+    // this frame's sample and the next frame's sample (see smoothMotion).
+    // Look the same track up one data frame ahead to get the glide target.
+    const nextFr = data.frameAt(currentFrameIdx + 1);
+    const pool = isGoalie ? (nextFr.goalies || []) : (nextFr.players || []);
+    let nextPos = null;
+    for (const q of pool) {
+      if (q.track_id === p.track_id) { nextPos = { x: q.ice_x, y: q.ice_y }; break; }
+    }
+    entry.targetPos = pos;
+    entry.nextPos = nextPos;
+    // Glide to the next sample only when the move between the two is a
+    // physically plausible skater speed. A jump above the cap is a
+    // ByteTrack id-reuse (the id was handed to a different skater) -- hold
+    // this frame's position and snap at the frame boundary rather than
+    // sliding the avatar across the rink.
+    entry.glide = !!nextPos && Math.hypot(nextPos.x - pos.x, nextPos.y - pos.y)
+                  * fps <= MAX_PLAYER_FT_PER_SEC;
+    if (!entry.renderedPos) {
       entry.renderedPos = { ...pos };
       entry.mesh.position.set(pos.x, 0, pos.y);
-      entry.mesh.userData.cyclePhase = 0;
-    } else {
-      // Outlier guard: reject single-update jumps that imply a speed
-      // above MAX_PLAYER_FT_PER_SEC. These are almost always id-swap
-      // teleports the source-side stitcher didn't catch. Holding the
-      // last target avoids the visible "jolt" without permanently
-      // losing the track — next valid sample will pull us back.
-      const dx = pos.x - entry.targetPos.x;
-      const dy = pos.y - entry.targetPos.y;
-      const dt = frameDelta / fps;
-      const impliedSpeed = Math.hypot(dx, dy) / dt;
-      if (impliedSpeed <= MAX_PLAYER_FT_PER_SEC) {
-        entry.targetPos = pos;
-      }
-      // else: keep prior target, but still mark the track as live below
     }
     entry.mesh.visible = true;
     entry.lastFrameIdx = currentFrameIdx;
@@ -513,43 +508,30 @@ function applyFrame(fr) {
   for (const e of avatars.values()) if (e.mesh.visible) visibleN++;
   hudCounterEl.textContent = `${visibleN} avatars · ${rawN} this frame · ${avatars.size} total tracks`;
 
-  // Single-puck policy with outlier-reject + persistence:
-  //   1. tracked puck position if available — but reject single-frame
-  //      jumps implying > MAX_PUCK_FT_PER_SEC (almost always a stick or
-  //      skate-blade mislabel).
+  // Single-puck policy:
+  //   1. tracked puck position if available — interpolated frame-to-frame
+  //      exactly like the avatars (see smoothMotion).
   //   2. else, if a quiz event is active and the carrier's avatar is on
   //      screen, snap target to the carrier's stick-blade tip.
   //   3. else, KEEP the puck visible at the last target for
-  //      PUCK_PERSIST_FRAMES, then hide. Bridges typical 0.5s dropouts
-  //      without strobing; the rendered position lerps each tick.
+  //      PUCK_PERSIST_FRAMES, then hide. Bridges typical 0.5s dropouts.
   if (fr.puck) {
     const pos = { x: fr.puck.ice_x, y: fr.puck.ice_y };
-    if (!puckState.targetPos || puckState.lastUpdateFrameIdx < 0) {
-      puckState.targetPos = pos;
-      puckState.renderedPos = { ...pos };
-    } else {
-      const frameDelta = Math.max(1, currentFrameIdx - puckState.lastUpdateFrameIdx);
-      const dt = frameDelta / fps;
-      const dx = pos.x - puckState.targetPos.x;
-      const dy = pos.y - puckState.targetPos.y;
-      const impliedSpeed = Math.hypot(dx, dy) / dt;
-      // Big time gap → treat as teleport (snap, don't lerp).
-      // Otherwise accept only physically plausible jumps.
-      if (frameDelta > PUCK_PERSIST_FRAMES) {
-        puckState.targetPos = pos;
-        puckState.renderedPos = { ...pos };
-      } else if (impliedSpeed <= MAX_PUCK_FT_PER_SEC) {
-        puckState.targetPos = pos;
-      }
-      // else: keep prior target (outlier rejected)
-    }
+    // Look one data frame ahead for the next puck sample to glide toward.
+    const nextPuck = data.frameAt(currentFrameIdx + 1).puck;
+    const nextPos = nextPuck
+      ? { x: nextPuck.ice_x, y: nextPuck.ice_y } : null;
+    puckState.targetPos = pos;
+    puckState.nextPos = nextPos;
+    puckState.glide = !!nextPos && Math.hypot(nextPos.x - pos.x, nextPos.y - pos.y)
+                      * fps <= MAX_PUCK_FT_PER_SEC;
+    if (!puckState.renderedPos) puckState.renderedPos = { ...pos };
     puckState.lastUpdateFrameIdx = currentFrameIdx;
   } else if (
     quiz.active && quiz.currentEvent && quiz.currentEvent.player_id != null
   ) {
     // Carrier snap. Read the blade's world position from the rendered
-    // avatar (which is itself lerped, so the puck naturally follows
-    // the smoothed carrier).
+    // avatar so the puck naturally follows the smoothed carrier.
     const carrierEntry = avatars.get(quiz.currentEvent.player_id);
     if (carrierEntry && carrierEntry.mesh.visible) {
       const blade = carrierEntry.mesh.userData.stickBlade;
@@ -557,12 +539,14 @@ function applyFrame(fr) {
         const wp = new THREE.Vector3();
         blade.getWorldPosition(wp);
         puckState.targetPos = { x: wp.x, y: wp.z };
+        puckState.nextPos = null;
+        puckState.glide = false;
         if (!puckState.renderedPos) puckState.renderedPos = { ...puckState.targetPos };
         puckState.lastUpdateFrameIdx = currentFrameIdx;
       }
     }
   }
-  // Visibility is decided in the lerp pass below based on
+  // Visibility is decided in the smoothMotion pass below based on
   // (currentFrameIdx - puckState.lastUpdateFrameIdx) vs PUCK_PERSIST_FRAMES.
 
   updateActiveEventOverlays(currentFrameIdx);
@@ -673,30 +657,47 @@ function activeCamera() {
   return cameras[activeCamMode];
 }
 
-// ── Per-render-tick motion smoothing.
+// ── Per-render-tick motion placement.
 //
-// Walks every visible avatar + the puck and lerps their rendered
-// position toward the latest data-driven target with an exponential
-// decay (tau in seconds). This decouples the 30 fps data stream from
-// the 60 fps render loop and turns choppy sampled positions into a
-// continuous glide. The skating animation runs off the *rendered*
-// velocity so legs and facing stay in sync with what's actually drawn.
+// Each object's rendered position is the EXACT linear interpolation
+// between its data sample at the current frame and the next frame, by the
+// fractional part of the playback frame index. Because the data is already
+// motion-filtered upstream, this places the avatar exactly where the data
+// puts it (zero lag vs the side-by-side verification view) while still
+// gliding continuously at the 60 fps render rate. The skating animation
+// runs off the rendered velocity so legs and facing stay in sync.
 let lastSmoothNowMs = -1;
 function smoothMotion(nowMs) {
   const dtMs = lastSmoothNowMs < 0 ? 16.67 : nowMs - lastSmoothNowMs;
   lastSmoothNowMs = nowMs;
   const dt = Math.min(0.1, Math.max(0.001, dtMs / 1000)); // clamp pathological dt
 
+  const frameIdx = playback ? playback.frameIdx : 0;
+
+  // Fraction of the way from an object's data frame to the next, in [0,1].
+  // Computed per object from its own lastFrameIdx so a stale object (one
+  // not refreshed this frame, e.g. an uncalibrated gap) holds rather than
+  // sliding past its next sample.
+  function fracFor(lastIdx) {
+    return Math.max(0, Math.min(1, frameIdx - lastIdx));
+  }
+
   // Avatars
-  const alphaPlayer = 1 - Math.exp(-dt / PLAYER_SMOOTHING_TAU);
   for (const entry of avatars.values()) {
     if (!entry.targetPos || !entry.renderedPos) continue;
     const prev = { x: entry.renderedPos.x, y: entry.renderedPos.y };
-    entry.renderedPos.x += (entry.targetPos.x - entry.renderedPos.x) * alphaPlayer;
-    entry.renderedPos.y += (entry.targetPos.y - entry.renderedPos.y) * alphaPlayer;
+    if (entry.glide && entry.nextPos) {
+      const f = fracFor(entry.lastFrameIdx);
+      entry.renderedPos = {
+        x: entry.targetPos.x + (entry.nextPos.x - entry.targetPos.x) * f,
+        y: entry.targetPos.y + (entry.nextPos.y - entry.targetPos.y) * f,
+      };
+    } else {
+      entry.renderedPos = { ...entry.targetPos };
+    }
     if (entry.mesh.visible) {
-      // Update facing + skating cycle from the smoothed motion. Real dt
-      // (in seconds) so velocity-derived speed is in ft/s.
+      // Facing + skating cycle from the rendered motion. Real dt (seconds)
+      // so the velocity-derived speed is in ft/s.
       updateAvatar(entry.mesh, prev, entry.renderedPos, dt);
     }
   }
@@ -704,13 +705,18 @@ function smoothMotion(nowMs) {
   // Puck
   if (puckState.targetPos) {
     if (!puckState.renderedPos) puckState.renderedPos = { ...puckState.targetPos };
-    const alphaPuck = 1 - Math.exp(-dt / PUCK_SMOOTHING_TAU);
-    puckState.renderedPos.x += (puckState.targetPos.x - puckState.renderedPos.x) * alphaPuck;
-    puckState.renderedPos.y += (puckState.targetPos.y - puckState.renderedPos.y) * alphaPuck;
+    if (puckState.glide && puckState.nextPos) {
+      const f = fracFor(puckState.lastUpdateFrameIdx);
+      puckState.renderedPos = {
+        x: puckState.targetPos.x + (puckState.nextPos.x - puckState.targetPos.x) * f,
+        y: puckState.targetPos.y + (puckState.nextPos.y - puckState.targetPos.y) * f,
+      };
+    } else {
+      puckState.renderedPos = { ...puckState.targetPos };
+    }
     puck.position.set(puckState.renderedPos.x, 0.15, puckState.renderedPos.y);
     // Visibility: stay on for PUCK_PERSIST_FRAMES after the last update,
     // then fade out. data.fps is null until first JSON load.
-    const fps = data?.fps || 30;
     const currentFrameIdx = playback ? Math.floor(playback.frameIdx) : 0;
     const ageFrames = currentFrameIdx - puckState.lastUpdateFrameIdx;
     puck.visible = puckState.lastUpdateFrameIdx >= 0 && ageFrames <= PUCK_PERSIST_FRAMES;
@@ -1104,7 +1110,12 @@ if (dataParam) loadData(dataParam, false);
 // Cheap, safe in production.
 window.__hockeyAI = {
   snapshot() {
-    const out = { avatars: [], puck: null };
+    const out = {
+      avatars: [], puck: null,
+      // Fractional playback frame index — lets a probe align render
+      // samples to data frames and measure rendered-vs-data fidelity.
+      frameIdx: playback ? playback.frameIdx : 0,
+    };
     for (const [tid, e] of avatars) {
       if (!e.mesh.visible) continue;
       out.avatars.push({
