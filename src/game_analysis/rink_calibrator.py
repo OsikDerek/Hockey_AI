@@ -100,6 +100,12 @@ class RinkCalibrator:
                                                   # detected pixel-line to the predicted
                                                   # projection of an ice-line for them to
                                                   # be paired
+        # B3: learned rink registration (HockeyRink keypoint model)
+        use_learned_registration: bool = True,   # when models/HockeyRink.pt is
+                                                  # present, the learned model is the
+                                                  # PRIMARY calibration path and the
+                                                  # classical B0/B1/B2 machinery is
+                                                  # used only as a fallback
     ):
         self.ema_alpha = ema_alpha
         self.max_scale_change = max_scale_change
@@ -129,6 +135,22 @@ class RinkCalibrator:
         self._homography_correspondences: int = 0  # count from most recent fit
 
         self._frame_count: int = 0
+
+        # B3: learned rink registration. Lazy-loaded; when the HockeyRink
+        # weights are present this is the primary path (see update()).
+        self._reg_model = None
+        self._last_registration_info: Optional[dict] = None
+        if use_learned_registration:
+            try:
+                from .rink_registration.registration_model import RinkRegistrationModel
+                m = RinkRegistrationModel()
+                if m.available:
+                    self._reg_model = m
+                    print("  RinkCalibrator: learned rink registration ACTIVE "
+                          "(HockeyRink keypoint model) — primary calibration path")
+            except Exception as e:
+                print(f"  RinkCalibrator: learned registration unavailable ({e}); "
+                      "using classical calibration")
 
     @property
     def is_calibrated(self) -> bool:
@@ -160,6 +182,29 @@ class RinkCalibrator:
         frame" to "5+ correspondences every frame the rink is in shot."
         """
         self._frame_count += 1
+
+        # ── Step 0: learned rink registration (B3) ──────────────────────
+        # When the HockeyRink keypoint model is loaded it is the PRIMARY
+        # calibration path. It detects 56 named rink keypoints and solves
+        # the homography directly from their known ice coordinates — no
+        # similarity-prior bootstrap, no dot-disambiguation guesswork.
+        # On a successful fit we take its homography as authoritative and
+        # skip the classical B0/B1/B2 machinery entirely. On a miss we
+        # HOLD the previous homography (broadcast cameras move smoothly,
+        # so the last good fit is a good bridge); the caller resets us on
+        # camera cuts. Classical calibration only runs when the learned
+        # model is unavailable.
+        if self._reg_model is not None:
+            if frame is not None:
+                result = self._reg_model.estimate(frame)
+                if result is not None:
+                    H_p2i, H_i2p, info = result
+                    self._homography = H_i2p          # ice -> pixel
+                    self._homography_inv = H_p2i      # pixel -> ice
+                    self._homography_correspondences = int(info.get("n_used", 0))
+                    self._last_registration_info = info
+                    self._calibrated = True
+            return  # learned path is authoritative; classical is bypassed
 
         goals = [g for g in rink_landmarks.get("goal", []) if g.confidence >= 0.4]
         centroids = [c for c in rink_landmarks.get("centroid", []) if c.confidence >= 0.4]
