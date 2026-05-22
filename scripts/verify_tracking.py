@@ -28,7 +28,9 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 RINK_L, RINK_W = 200.0, 85.0
+CY = 42.5                    # rink centerline (ice-y), feet
 MAX_PLAYER_FT_PER_S = 48.0   # hockey top speed ~40 ft/s; >48 = implausible
 EXPECTED_SKATERS = 10        # 5v5; +2 goalies = 12 on ice
 
@@ -49,8 +51,67 @@ def _source_video_for(clip: str) -> Path | None:
     return None
 
 
-def _draw_topdown(frame_data, w, h):
-    """Render one top-down rink frame from a positions-JSON frame dict."""
+def _detect_orientation(video_path):
+    """Determine how the broadcast camera maps ice axes to screen axes,
+    so the top-down panel is drawn in the SAME orientation as the
+    footage (not mirrored). Returns (flip_x, flip_y).
+
+    Runs the rink-registration model on a spread of frames and, for each
+    that fits, projects known ice points to pixels: if ice-x increases
+    leftward on screen we flip x; if ice-y increases upward on screen we
+    flip y. Decisions are MAJORITY-VOTED across all fitting frames so a
+    single degenerate homography can't dictate the orientation.
+
+    Note: the rink markings are mirror-symmetric, so a calibration
+    overlay cannot reveal a left/right or near/far flip -- only the
+    asymmetric camera->ice homography can, which is why this is needed.
+    """
+    try:
+        from src.game_analysis.rink_registration.registration_model import (
+            RinkRegistrationModel)
+    except Exception as e:
+        print(f"  orientation: registration import failed ({e}) - no flip")
+        return False, False
+    reg = RinkRegistrationModel(str(PROJECT_ROOT / "models" / "HockeyRink.pt"))
+    if not reg.available:
+        print("  orientation: registration model unavailable - no flip")
+        return False, False
+    cap = cv2.VideoCapture(str(video_path))
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 600
+    votes_x, votes_y = [], []
+    for fi in range(0, n, max(1, n // 60)):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+        ok, frame = cap.read()
+        if not ok:
+            break
+        r = reg.estimate(frame)
+        if r is None:
+            continue
+        _H_p2i, H_i2p, _info = r
+
+        def proj(pt):
+            return cv2.perspectiveTransform(
+                np.array([[pt]], np.float64), H_i2p).reshape(2)
+
+        pL, pR = proj((10.0, CY)), proj((190.0, CY))
+        pT, pB = proj((100.0, 5.0)), proj((100.0, 80.0))
+        # top-down draws ice-x rightward, ice-y downward; flip to match
+        votes_x.append(pL[0] > pR[0])
+        votes_y.append(pT[1] > pB[1])
+    cap.release()
+    if not votes_x:
+        print("  orientation: no frames fit - no flip")
+        return False, False
+    flip_x = sum(votes_x) > len(votes_x) / 2
+    flip_y = sum(votes_y) > len(votes_y) / 2
+    print(f"  orientation: {len(votes_x)} frames voted "
+          f"(x:{sum(votes_x)} y:{sum(votes_y)})")
+    return bool(flip_x), bool(flip_y)
+
+
+def _draw_topdown(frame_data, w, h, flip_x=False, flip_y=False):
+    """Render one top-down rink frame from a positions-JSON frame dict,
+    oriented to match the broadcast camera (flip_x / flip_y)."""
     img = np.full((h, w, 3), 60, np.uint8)
     pad = 24
     sx = (w - 2 * pad) / RINK_L
@@ -58,6 +119,10 @@ def _draw_topdown(frame_data, w, h):
     s = min(sx, sy)
 
     def px(x, y):
+        if flip_x:
+            x = RINK_L - x
+        if flip_y:
+            y = RINK_W - y
         return int(pad + x * s), int(pad + y * s)
 
     cv2.rectangle(img, px(0, 0), px(RINK_L, RINK_W), (150, 150, 150), 2)
@@ -103,6 +168,13 @@ def main(argv):
     src = _source_video_for(args.clip)
     cap = cv2.VideoCapture(str(src)) if src else None
     print(f"clip: {args.clip}  ({n} frames)   source: {src.name if src else 'NOT FOUND'}")
+
+    # Orient the top-down panel to match the broadcast camera (the
+    # rink-registration homography tells us which way the axes run).
+    flip_x = flip_y = False
+    if src is not None:
+        flip_x, flip_y = _detect_orientation(src)
+        print(f"camera orientation: flip_x={flip_x} flip_y={flip_y}")
 
     out_dir = PROJECT_ROOT / "output" / "_verify"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +234,7 @@ def main(argv):
                 sw = 960
                 sh = int(sframe.shape[0] * sw / sframe.shape[1])
                 sframe = cv2.resize(sframe, (sw, sh))
-                top = _draw_topdown(fr, sw, panel_h)
+                top = _draw_topdown(fr, sw, panel_h, flip_x, flip_y)
                 comp = np.vstack([sframe, top])
                 cv2.putText(comp, f"frame {fi}  players={len(players)} "
                             f"goalies={len(goalies)} puck={'Y' if puck else 'N'} "
