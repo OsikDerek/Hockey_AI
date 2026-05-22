@@ -157,6 +157,15 @@ def run_game_analysis_mode(args, meta):
                 # correct for it (its bbox is tiny).
                 obj.ice_xy = rink_calibrator.pixel_to_ice(obj.foot_point)
 
+        # Collect this frame's full on-ice puck candidate set with ice
+        # positions, for the post-pass motion filter's global trajectory
+        # selection. The streaming PuckFilter already picked one puck for
+        # `objects`; these are every candidate it considered.
+        puck_candidates = list(getattr(tracker, "last_puck_candidates", []))
+        if rink_calibrator.is_calibrated:
+            for cand in puck_candidates:
+                cand.ice_xy = rink_calibrator.pixel_to_ice(cand.foot_point)
+
         # Shootout-like context: shooter(s) + opposing goalie, no defensive
         # structure. Hysteresis tolerates single-frame goalie dropouts so a
         # YOLO miss doesn't flip the flag off mid-approach (which would let
@@ -212,6 +221,7 @@ def run_game_analysis_mode(args, meta):
             objects=objects,
             players=players,
             puck=puck,
+            puck_candidates=puck_candidates,
             goalies=goalies,
             referees=referees,
             rink_landmarks=rink_landmarks,
@@ -263,6 +273,13 @@ def run_game_analysis_mode(args, meta):
     print(f"  Gameplay frames: {analysis.gameplay_frames}/{analysis.total_frames} "
           f"({analysis.gameplay_frames / max(analysis.total_frames, 1) * 100:.0f}%)")
     print(f"  Camera cuts: {analysis.camera_cuts}")
+
+    # ── Motion-consistency filter ─────────────────────────
+    # Re-select the puck globally from the buffered per-frame candidates and
+    # reject physically-impossible jumps in the player/goalie tracks. Runs
+    # over the full buffered trajectory before rendering + JSON export.
+    from .motion_filter import apply_motion_filter
+    apply_motion_filter(analysis, meta["fps"])
 
     # Team classification summary
     team_summary = team_classifier.summary()

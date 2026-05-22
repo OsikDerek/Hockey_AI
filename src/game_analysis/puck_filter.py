@@ -56,6 +56,11 @@ class PuckFilter:
         self._last_track_id: int = -1
         self._frames_since_seen: int = 9999
 
+        # All on-ice candidates that survived the filters this frame (before
+        # the single-puck pick). Exposed for the post-pass motion filter,
+        # which re-selects the puck globally across the whole clip.
+        self.last_candidates: list = []
+
         # Frame-cache for the ice mask (built once per frame index)
         self._cached_mask: Optional[np.ndarray] = None
         self._cached_frame_idx: int = -1
@@ -84,6 +89,7 @@ class PuckFilter:
 
         if not puck_candidates:
             # Maybe coast a ghost
+            self.last_candidates = []
             ghost = self._maybe_ghost()
             self._frames_since_seen += 1
             return non_pucks + ([ghost] if ghost is not None else [])
@@ -102,9 +108,13 @@ class PuckFilter:
 
         if not survivors:
             # All candidates rejected; coast if possible
+            self.last_candidates = []
             ghost = self._maybe_ghost()
             self._frames_since_seen += 1
             return non_pucks + ([ghost] if ghost is not None else [])
+
+        # Expose every surviving candidate for the post-pass motion filter.
+        self.last_candidates = list(survivors)
 
         # Score and pick best
         chosen = self._pick_best(survivors)

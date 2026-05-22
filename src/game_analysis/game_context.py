@@ -59,6 +59,9 @@ class FrameContext:
     objects: list = field(default_factory=list)       # list[TrackedObject]
     players: list = field(default_factory=list)       # convenience: just players
     puck: Optional[TrackedObject] = None              # highest-conf puck
+    puck_candidates: list = field(default_factory=list)  # all on-ice puck
+    # candidates this frame (ice_xy tagged); consumed by the post-pass
+    # motion filter's global trajectory selection.
     goalies: list = field(default_factory=list)       # convenience: goalies
     referees: list = field(default_factory=list)      # convenience: referees
 

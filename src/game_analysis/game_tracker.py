@@ -114,6 +114,8 @@ class GameTracker:
         self.puck_filter = PuckFilter(min_conf=min(puck_conf, 0.15))
 
         self._frame_count = 0
+        # Per-frame on-ice puck candidate set (set by process_frame).
+        self.last_puck_candidates: list = []
 
     def process_frame(
         self,
@@ -202,6 +204,9 @@ class GameTracker:
             self.puck_filter._frames_since_seen = 9999
 
         objects = self.puck_filter.filter(objects, frame)
+        # Expose this frame's full on-ice puck candidate set so the post-pass
+        # motion filter can re-select the puck globally across the clip.
+        self.last_puck_candidates = list(self.puck_filter.last_candidates)
         return objects
 
     @staticmethod
