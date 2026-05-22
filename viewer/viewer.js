@@ -953,11 +953,17 @@ function deriveSourceVideoUrl(jsonPath) {
   // scripts/prepare_web_video.py). Original-source mp4s often use the
   // mpeg4 / Simple Profile codec from sports-cam recorders, which
   // browsers (especially headless Chromium) refuse to decode.
-  // Strip pipeline version suffixes (e.g. "_v4", "_v12") so a JSON named
-  // `livebarn_cropped_v4_positions.json` still finds the source video
-  // `livebarn_60sec_cropped.mp4`. The source video doesn't get re-named
-  // per pipeline run; only the JSON does.
-  const cleanedBase = base.replace(/_v\d+$/, "");
+  // Strip pipeline run/version suffixes (e.g. "_v4", "_v12", "_b3") so a
+  // JSON named `wpg_pp_b3_positions.json` still finds the source video
+  // `wpg_pp_60sec.mp4`. The source video doesn't get re-named per
+  // pipeline run; only the JSON does. Strip repeatedly in case of
+  // stacked tags.
+  let cleanedBase = base;
+  let prev;
+  do {
+    prev = cleanedBase;
+    cleanedBase = cleanedBase.replace(/_(v|b)\d+$/, "");
+  } while (cleanedBase !== prev);
 
   const seeds = [cleanedBase];
   if (cleanedBase !== base) seeds.push(base);

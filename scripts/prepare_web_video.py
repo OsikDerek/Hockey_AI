@@ -46,7 +46,7 @@ def transcode(src: Path) -> int:
         "-an",
         str(dst),
     ]
-    print(f"transcoding {src.name} → {dst.name}")
+    print(f"transcoding {src.name} -> {dst.name}")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print(f"  ffmpeg failed:\n{r.stderr[-600:]}")
