@@ -47,6 +47,8 @@ class GameTracker:
         tracker: str = "bytetrack.yaml",
         landmark_model_path: str = "models/landmarks_yolov8n.pt",
         landmark_conf: float = 0.20,
+        puck_imgsz: int = 1920,
+        puck_conf: float = 0.15,
     ):
         from ultralytics import YOLO
 
@@ -66,10 +68,14 @@ class GameTracker:
         self.conf = conf
         self.iou = iou
         self.tracker_config = tracker
-        # Fallback puck-only confidence: lowered threshold for the fallback
-        # YOLO call when the primary call returns no puck. The PuckFilter
-        # still rejects bad candidates via on-ice + proximity scoring.
-        self.puck_fallback_conf = 0.10
+        # Puck detection is a dedicated high-resolution pass. The puck is a
+        # tiny object (a few pixels on a 1080p broadcast frame); the primary
+        # track() call at the default imgsz downscales it into near
+        # invisibility. A puck-only predict() at native broadcast resolution
+        # lifts raw per-frame detection from ~36% to ~87% on caufield_goal.
+        # The PuckFilter still rejects bad candidates via on-ice + proximity.
+        self.puck_imgsz = puck_imgsz
+        self.puck_conf = puck_conf
 
         # Optional rink-landmarks specialist model. When present, runs in
         # parallel with the main model and its centroid / faceoff / goal
@@ -102,8 +108,10 @@ class GameTracker:
                 self._puck_class_id = int(cid)
                 break
 
-        # Single-puck enforcement + on-ice filtering + short coast on dropouts
-        self.puck_filter = PuckFilter()
+        # Single-puck enforcement + on-ice filtering + short coast on dropouts.
+        # min_conf tracks the puck pass conf so PuckFilter never re-discards
+        # a detection the high-res pass already accepted.
+        self.puck_filter = PuckFilter(min_conf=min(puck_conf, 0.15))
 
         self._frame_count = 0
 
@@ -145,26 +153,26 @@ class GameTracker:
         else:
             objects = self._parse_results(results[0])
 
-        # Fallback puck-only YOLO call when the primary missed the puck.
-        # Runs on a SEPARATE model instance because predict() corrupts the
-        # primary tracker's ByteTrack state. Throttled to every other
-        # missed frame: the PuckFilter coast window already covers 5
-        # frames, so an alternating fallback still recovers dropouts
-        # without paying double inference cost on every frame.
-        has_puck = any(o.class_name == "puck" for o in objects)
-        if not has_puck and self._puck_class_id is not None and (self._frame_count % 2 == 0):
+        # Dedicated high-resolution puck pass. Runs every frame on a SEPARATE
+        # model instance (predict() corrupts the primary tracker's ByteTrack
+        # state) at native broadcast resolution, puck class only. Puck
+        # detections from the primary track() call are discarded in favour of
+        # this pass — at the default imgsz the primary barely sees the puck.
+        objects = [o for o in objects if o.class_name != "puck"]
+        if self._puck_class_id is not None:
             try:
                 fb = self.fallback_model.predict(
                     frame,
                     classes=[self._puck_class_id],
-                    conf=self.puck_fallback_conf,
+                    conf=self.puck_conf,
+                    imgsz=self.puck_imgsz,
                     verbose=False,
                 )
                 if fb and len(fb) > 0:
                     fb_objects = self._parse_results(fb[0])
                     objects.extend(o for o in fb_objects if o.class_name == "puck")
             except Exception:
-                pass  # Fallback is best-effort; never crash the pipeline
+                pass  # Best-effort; never crash the pipeline
 
         # Landmark specialist: when loaded, run alongside the main model
         # to augment rink-landmark coverage. We UNION both sets of

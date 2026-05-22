@@ -132,19 +132,30 @@ class PuckFilter:
     def _is_on_ice(
         self, puck: TrackedObject, ice_mask: np.ndarray, w: int, h: int
     ) -> bool:
-        """Check whether the puck's center sits on or near ice pixels."""
-        cx, cy = puck.center
-        cx = int(np.clip(cx, 0, w - 1))
-        cy = int(np.clip(cy, 0, h - 1))
-        # Sample a small window (the puck is small, so a 5x5 patch is enough)
-        x0 = max(0, cx - 2)
-        x1 = min(w, cx + 3)
-        y0 = max(0, cy - 2)
-        y1 = min(h, cy + 3)
-        patch = ice_mask[y0:y1, x0:x1]
+        """Check whether the puck sits on or beside ice pixels.
+
+        Samples a window around the puck's bounding box, expanded outward by
+        a margin -- NOT the puck's centre. The puck is a small dark object;
+        at native broadcast resolution its centre pixels read as non-ice, so
+        a centre-only check rejects genuine on-ice pucks. A real puck always
+        has ice pixels immediately surrounding it; a false positive in the
+        crowd or on the scoreboard does not.
+        """
+        x1, y1, x2, y2 = puck.bbox
+        bw = max(x2 - x1, 4.0)
+        bh = max(y2 - y1, 4.0)
+        # Expand the bbox outward by ~1x its size (at least 16 px) so the
+        # sampled window straddles the puck and the ice around it.
+        mx = max(bw, 16.0)
+        my = max(bh, 16.0)
+        x0 = int(np.clip(x1 - mx, 0, w - 1))
+        xe = int(np.clip(x2 + mx, 0, w))
+        y0 = int(np.clip(y1 - my, 0, h - 1))
+        ye = int(np.clip(y2 + my, 0, h))
+        patch = ice_mask[y0:ye, x0:xe]
         if patch.size == 0:
             return False
-        # Pass if any cell in the patch is "ice" (puck sits on ice or on its edge)
+        # Pass if any pixel in the surrounding window is ice.
         return bool(patch.any())
 
     def _pick_best(self, survivors: list) -> TrackedObject:
