@@ -23,11 +23,14 @@ Puck -- a global trajectory selection. Every frame buffers ALL on-ice puck
   Because the link motion test spans the whole gap, an interpolated bridge
   can never represent an impossible jump.
 
-Players / goalies -- per-track outlier rejection. Each ByteTrack id is a
-  trajectory; an isolated position that jumps away from and back to its
-  neighbours (a return-spike) is replaced by the interpolated midpoint.
-  Conservative: only isolated single-frame outliers are touched, never
-  sustained segments (those are id-continuity errors, a separate problem).
+Players / goalies -- a centered median filter on each ByteTrack id's ice
+  trajectory. The learned homography jitters slightly frame-to-frame; that
+  jitter is common-mode (every object on the ice shifts in unison) and
+  surfaces as 1-2 frame position spikes -- 50+ of the implausible player
+  transitions on caufield_trim trace to it, not to ByteTrack id swaps. A
+  centered median filter -- valid here because this is a post-pass with
+  every frame buffered, so it has zero lag -- removes those spikes while
+  leaving smooth skating motion essentially untouched.
 
 Everything operates in ice coordinates (feet), where "plausible" is a
 physical statement, and writes corrected values back into the frame
@@ -35,6 +38,7 @@ contexts so both the positions JSON and the rendered video see clean data.
 """
 
 import math
+from statistics import median
 
 from .game_context import TrackedObject
 
@@ -56,11 +60,10 @@ MOTION_W = 0.05           # ramp penalty per ft/s above COMFORT
 MAX_BRIDGE_GAP = 10       # never interpolate a chosen-path gap longer than this
 MAX_LOOKBACK = 120        # frames; a longer puck blackout is treated as fresh
 
-# Return-spike thresholds, feet of single-frame displacement. A spike must
-# exceed this on both sides AND have its neighbours closer to each other than
-# to the suspect point, so a genuine fast stride is not flagged.
-PLAYER_SPIKE_FT = 3.5
-GOALIE_SPIKE_FT = 2.5
+# Player / goalie ice-track median filter: window radius in frames (a radius
+# of 2 -> a 5-sample centered window, which fully removes 1-frame spikes).
+TRACK_MEDIAN_RADIUS = 2
+TRACK_SMOOTH_REPORT_FT = 0.5  # count a sample as "smoothed" if moved this far
 
 INF = float("inf")
 
@@ -185,34 +188,39 @@ def _write_back_puck(contexts, chosen: list) -> None:
 
 
 # ------------------------------------------------------ player / goalie
-def _filter_tracked(contexts, key: str, spike_ft: float) -> int:
-    """Replace isolated return-spike outliers in each ByteTrack id with the
-    interpolated midpoint of their neighbours. Operates on ice_xy in place."""
+def _filter_tracked(contexts, key: str) -> int:
+    """Centered median filter on each ByteTrack id's ice trajectory.
+
+    Replaces every sample's ice_xy with the per-axis median of a centered
+    window. On a smooth stretch the median equals the original (no lag, no
+    bias); a 1-frame calibration spike is replaced by a clean neighbour
+    value. Operates on ice_xy in place. Returns the count of samples moved
+    more than TRACK_SMOOTH_REPORT_FT.
+    """
+    r = TRACK_MEDIAN_RADIUS
     tracks: dict = {}
-    for fi, ctx in enumerate(contexts):
+    for ctx in contexts:  # contexts already in frame order
         for o in getattr(ctx, key, []) or []:
             if o.ice_xy is None or o.track_id is None:
                 continue
-            tracks.setdefault(o.track_id, []).append((fi, o))
+            tracks.setdefault(o.track_id, []).append(o)
 
-    fixed = 0
+    smoothed = 0
     for seq in tracks.values():
-        seq.sort(key=lambda t: t[0])
-        # Two passes so a spike adjacent to a spike still resolves.
-        for _ in range(2):
-            for i in range(1, len(seq) - 1):
-                (fp, op), (fc, oc), (fn, on) = seq[i - 1], seq[i], seq[i + 1]
-                if fc - fp != 1 or fn - fc != 1:
-                    continue  # need immediate neighbours for a clean test
-                d_prev = _dist(oc.ice_xy, op.ice_xy)
-                d_next = _dist(oc.ice_xy, on.ice_xy)
-                d_skip = _dist(op.ice_xy, on.ice_xy)
-                if (d_prev > spike_ft and d_next > spike_ft
-                        and d_skip < min(d_prev, d_next)):
-                    oc.ice_xy = ((op.ice_xy[0] + on.ice_xy[0]) / 2.0,
-                                 (op.ice_xy[1] + on.ice_xy[1]) / 2.0)
-                    fixed += 1
-    return fixed
+        n = len(seq)
+        if n < 3:
+            continue
+        xs = [o.ice_xy[0] for o in seq]   # snapshot of the raw track
+        ys = [o.ice_xy[1] for o in seq]
+        for i in range(n):
+            lo, hi = max(0, i - r), min(n, i + r + 1)
+            mx, my = median(xs[lo:hi]), median(ys[lo:hi])
+            o = seq[i]
+            if abs(mx - o.ice_xy[0]) > TRACK_SMOOTH_REPORT_FT or \
+                    abs(my - o.ice_xy[1]) > TRACK_SMOOTH_REPORT_FT:
+                smoothed += 1
+            o.ice_xy = (mx, my)
+    return smoothed
 
 
 # -------------------------------------------------------------- public
@@ -232,20 +240,20 @@ def apply_motion_filter(analysis, fps: float, verbose: bool = True) -> dict:
                        if c is not None and c.confidence == 0.0)
     _write_back_puck(contexts, chosen)
 
-    players_fixed = _filter_tracked(contexts, "players", PLAYER_SPIKE_FT)
-    goalies_fixed = _filter_tracked(contexts, "goalies", GOALIE_SPIKE_FT)
+    players_smoothed = _filter_tracked(contexts, "players")
+    goalies_smoothed = _filter_tracked(contexts, "goalies")
 
     stats = {
         "puck_before": puck_before,
         "puck_after": puck_after,
         "puck_real": puck_after - interpolated,
         "puck_interpolated": interpolated,
-        "player_spikes_fixed": players_fixed,
-        "goalie_spikes_fixed": goalies_fixed,
+        "player_samples_smoothed": players_smoothed,
+        "goalie_samples_smoothed": goalies_smoothed,
     }
     if verbose:
         print(f"  Motion filter: puck {puck_before} -> {puck_after} present "
               f"({stats['puck_real']} real + {interpolated} interpolated); "
-              f"player spikes fixed {players_fixed}, "
-              f"goalie spikes fixed {goalies_fixed}")
+              f"player samples smoothed {players_smoothed}, "
+              f"goalie samples smoothed {goalies_smoothed}")
     return stats
