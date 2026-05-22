@@ -28,8 +28,8 @@ class RinkRegistrationModel:
 
     def __init__(
         self,
-        weights_path: str = "models/rink_keypoints.pt",
-        kp_conf: float = 0.40,          # min per-keypoint confidence to use
+        weights_path: str = "models/HockeyRink.pt",
+        kp_conf: float = 0.50,          # min per-keypoint confidence to use
         min_correspondences: int = 5,   # min keypoints to attempt a fit
         ransac_reproj_px: float = 8.0,  # cv2.findHomography RANSAC threshold
         max_reproj_err_ft: float = 4.0, # reject fit if median reproj error worse

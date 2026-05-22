@@ -19,7 +19,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.game_analysis.rink_registration.registration_model import RinkRegistrationModel
-from src.game_analysis.rink_registration.keypoints import KEYPOINT_NAMES
 
 OUT_DIR = PROJECT_ROOT / "output" / "_rink_reg_val"
 CLIPS = {
@@ -31,7 +30,7 @@ SAMPLE_FRAMES = [120, 360, 600, 900, 1200]
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    reg = RinkRegistrationModel("models/rink_keypoints.pt")
+    reg = RinkRegistrationModel("models/HockeyRink.pt")
     if not reg.available:
         print("model not available")
         return 2
@@ -75,8 +74,8 @@ def main():
                         continue
                     color = (0, 255, 0) if c >= reg.kp_conf else (0, 165, 255)
                     cv2.circle(out, (int(px), int(py)), 5, color, -1)
-                    cv2.putText(out, KEYPOINT_NAMES[i][:10], (int(px) + 6, int(py)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+                    cv2.putText(out, str(i), (int(px) + 6, int(py)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
             cv2.imwrite(str(OUT_DIR / f"{clip_name}_{fi:04d}.png"), out)
         cap.release()
 
