@@ -231,10 +231,11 @@ def main() -> None:
         r = subprocess.run(
             [sys.executable, "main.py", "--game-analysis", "-i", str(video),
              "-o", f"output/{args.clip}.mp4"],
-            cwd=PROJECT_ROOT, capture_output=True, text=True)
+            cwd=PROJECT_ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="replace")  # pipeline prints non-ASCII
         if r.returncode != 0:
-            print(r.stdout[-2000:])
-            print(r.stderr[-2000:])
+            print((r.stdout or "")[-2000:])
+            print((r.stderr or "")[-2000:])
             raise SystemExit("pipeline run failed")
 
     if not json_path.exists():
