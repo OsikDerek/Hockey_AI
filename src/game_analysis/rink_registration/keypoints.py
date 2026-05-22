@@ -75,3 +75,14 @@ KEYPOINT_ICE_XY = [
 
 # Indices Derek identified directly (exact coords, highest trust).
 IDENTIFIED_KEYPOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 32, 33, 34, 35, 40, 41, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55]
+
+# Keypoints whose template ice coordinate is unreliable and must NOT feed the
+# homography solve. Found by a per-keypoint reprojection-error audit on the
+# caufield_trim broadcast (scripts: per-keypoint median error every frame):
+#   - 28, 36, 39: template coords land OUTSIDE the rink bounds (y<0 or
+#     x>200) -- auto-propagation errors in the original template build.
+#   - 29: an "identified" keypoint reprojecting a median 5.4 ft off.
+#   - 42: a propagated keypoint reprojecting a median 2.6 ft off.
+# RANSAC already rejects most of these per frame; excluding them up front
+# keeps the fit clean and frees the RANSAC outlier budget for real noise.
+UNRELIABLE_KEYPOINTS = [28, 29, 36, 39, 42]

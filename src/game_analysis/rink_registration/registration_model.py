@@ -20,7 +20,7 @@ from typing import Optional
 
 import numpy as np
 
-from .keypoints import KEYPOINT_ICE_XY, NUM_KEYPOINTS
+from .keypoints import KEYPOINT_ICE_XY, NUM_KEYPOINTS, UNRELIABLE_KEYPOINTS
 
 
 class RinkRegistrationModel:
@@ -41,6 +41,10 @@ class RinkRegistrationModel:
         self.max_reproj_err_ft = max_reproj_err_ft
         self._model = None
         self._ice_xy = np.array(KEYPOINT_ICE_XY, dtype=np.float64)
+        # Keypoint channels with unreliable template coords -- never solve
+        # the homography from these (see keypoints.UNRELIABLE_KEYPOINTS).
+        self._reliable = np.ones(NUM_KEYPOINTS, dtype=bool)
+        self._reliable[UNRELIABLE_KEYPOINTS] = False
         self.available = False
 
         if self.weights_path.is_file():
@@ -94,7 +98,7 @@ class RinkRegistrationModel:
         if kps is None:
             return None
 
-        use = kps[:, 2] >= self.kp_conf
+        use = (kps[:, 2] >= self.kp_conf) & self._reliable
         n_used = int(use.sum())
         if n_used < self.min_correspondences:
             return None
