@@ -49,6 +49,7 @@ class GameTracker:
         landmark_conf: float = 0.20,
         puck_imgsz: int = 1920,
         puck_conf: float = 0.15,
+        puck_model_path: str = "models/puck_nhl.pt",
     ):
         from ultralytics import YOLO
 
@@ -108,6 +109,23 @@ class GameTracker:
                 self._puck_class_id = int(cid)
                 break
 
+        # Dedicated NHL-fine-tuned puck detector. If models/puck_nhl.pt is
+        # present (produced by scripts/finetune_puck.py), it replaces the
+        # HockeyAI puck-class call for the high-resolution puck pass --
+        # single class, NHL-specific features. Falls back gracefully to the
+        # HockeyAI puck class when the fine-tuned model isn't there.
+        self.puck_model = None
+        pm = Path(puck_model_path)
+        if pm.is_file():
+            try:
+                self.puck_model = YOLO(str(pm))
+                print(f"  GameTracker: dedicated puck detector loaded from {pm} "
+                      f"(classes: {self.puck_model.names}) -- replaces HockeyAI "
+                      f"puck class for the high-res pass")
+            except Exception as e:
+                print(f"  GameTracker: dedicated puck model failed to load: {e}")
+                self.puck_model = None
+
         # Single-puck enforcement + on-ice filtering + short coast on dropouts.
         # min_conf tracks the puck pass conf so PuckFilter never re-discards
         # a detection the high-res pass already accepted.
@@ -155,14 +173,25 @@ class GameTracker:
         else:
             objects = self._parse_results(results[0])
 
-        # Dedicated high-resolution puck pass. Runs every frame on a SEPARATE
-        # model instance (predict() corrupts the primary tracker's ByteTrack
-        # state) at native broadcast resolution, puck class only. Puck
-        # detections from the primary track() call are discarded in favour of
-        # this pass — at the default imgsz the primary barely sees the puck.
+        # Dedicated high-resolution puck pass. Runs every frame at native
+        # broadcast resolution. Puck detections from the primary track()
+        # call are discarded in favour of this pass -- at the default imgsz
+        # the primary barely sees the puck.
+        #   - prefers the NHL-fine-tuned single-class puck detector if it
+        #     was loaded (models/puck_nhl.pt -- see scripts/finetune_puck.py);
+        #   - falls back to a puck-class-filtered call on a separate HockeyAI
+        #     instance (separate because predict() corrupts the primary
+        #     tracker's ByteTrack state on shared instances).
         objects = [o for o in objects if o.class_name != "puck"]
-        if self._puck_class_id is not None:
-            try:
+        try:
+            if self.puck_model is not None:
+                fb = self.puck_model.predict(
+                    frame, conf=self.puck_conf, imgsz=self.puck_imgsz,
+                    verbose=False,
+                )
+                if fb and len(fb) > 0:
+                    objects.extend(self._parse_puck_only(fb[0]))
+            elif self._puck_class_id is not None:
                 fb = self.fallback_model.predict(
                     frame,
                     classes=[self._puck_class_id],
@@ -173,8 +202,8 @@ class GameTracker:
                 if fb and len(fb) > 0:
                     fb_objects = self._parse_results(fb[0])
                     objects.extend(o for o in fb_objects if o.class_name == "puck")
-            except Exception:
-                pass  # Best-effort; never crash the pipeline
+        except Exception:
+            pass  # Best-effort; never crash the pipeline
 
         # Landmark specialist: when loaded, run alongside the main model
         # to augment rink-landmark coverage. We UNION both sets of
@@ -238,6 +267,30 @@ class GameTracker:
                     break
             if keep:
                 out.append(new_obj)
+        return out
+
+    def _parse_puck_only(self, result) -> list:
+        """Parse a single-class puck-detector result.
+
+        The fine-tuned puck detector emits one class (class 0 = "Puck"); we
+        force class_name="puck" + the HockeyAI puck class id (5) so every
+        downstream consumer -- PuckFilter, motion DP, annotator -- treats
+        these detections exactly like HockeyAI's puck-class output.
+        """
+        out = []
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            return out
+        cid = self._puck_class_id if self._puck_class_id is not None else 5
+        for i in range(len(boxes)):
+            x1, y1, x2, y2 = [float(v) for v in boxes.xyxy[i]]
+            conf = float(boxes.conf[i].item()) if boxes.conf is not None else 0.0
+            out.append(TrackedObject(
+                track_id=-1, class_name="puck", class_id=cid,
+                bbox=(x1, y1, x2, y2),
+                center=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
+                confidence=conf,
+            ))
         return out
 
     def _parse_landmark_results(self, result) -> list:

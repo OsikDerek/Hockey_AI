@@ -609,10 +609,16 @@ def _write_positions_json(output_path: str, analysis, meta, team_data,
             total_xy_count += 1
             if not (0 <= ix <= RINK_LENGTH_FT and 0 <= iy <= RINK_WIDTH_FT):
                 out_of_rink_count += 1
+            x1, y1, x2, y2 = ctx.puck.bbox
             puck_record = {
                 "ice_x": round(_clamp(float(ix), clamp_x_lo, clamp_x_hi), 2),
                 "ice_y": round(_clamp(float(iy), clamp_y_lo, clamp_y_hi), 2),
                 "confidence": round(float(ctx.puck.confidence), 3),
+                # Pixel bbox of the chosen puck detection (or its synthetic
+                # interpolated box, confidence 0). Auto-labelling consumes
+                # the high-confidence ones as YOLO training labels.
+                "bbox_px": [round(float(x1), 1), round(float(y1), 1),
+                            round(float(x2), 1), round(float(y2), 1)],
             }
 
         frames_out.append({
