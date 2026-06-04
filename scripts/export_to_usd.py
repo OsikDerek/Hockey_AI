@@ -41,11 +41,29 @@ FT_TO_M = 0.3048
 # A puck on the ice surface; small Z lift so it does not z-fight with the
 # rink plane in renderers that draw an ice mesh at Z=0.
 PUCK_Z_M = 0.04
+PUCK_R_M = 0.038
+PUCK_H_M = 0.025
+
+# Player avatar: a vertical capsule standing on the ice (~6 ft skater).
+PLAYER_HEIGHT_M = 1.83
+PLAYER_RADIUS_M = 0.28
+GOALIE_RADIUS_M = 0.40   # wider profile for pads
 
 # Rink dimensions for scene metadata (NHL spec; matches rink.js + calibrator).
 RINK_LENGTH_FT = 200.0
 RINK_WIDTH_FT = 85.0
 RINK_CORNER_RADIUS_FT = 28.0
+
+TEAM_COLORS = {
+    "team_a": (0.16, 0.86, 0.20),
+    "team_b": (0.18, 0.40, 0.92),
+    "unknown": (0.62, 0.62, 0.62),
+}
+PUCK_COLOR = (0.05, 0.05, 0.05)
+
+# Path (relative to the output USD) of the rink asset to reference under
+# World/Rink. Built by scripts/build_rink_usd.py.
+RINK_ASSET_RELPATH = "../assets/usd/rink_nhl.usda"
 
 
 def _runs(present_frames: list) -> list:
@@ -65,8 +83,37 @@ def _runs(present_frames: list) -> list:
     return runs
 
 
+def _capsule_lines(radius: float, height: float, color) -> list:
+    """A capsule standing on the ice at z=0 to z=height, axis Z."""
+    return [
+        '        def Capsule "Avatar"',
+        "        {",
+        f"            double radius = {radius}",
+        f"            double height = {max(0.01, height - 2 * radius)}",
+        '            uniform token axis = "Z"',
+        f"            double3 xformOp:translate = (0, 0, {height / 2})",
+        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "        }",
+    ]
+
+
+def _puck_disc_lines() -> list:
+    return [
+        '        def Cylinder "Disc"',
+        "        {",
+        f"            double radius = {PUCK_R_M}",
+        f"            double height = {PUCK_H_M}",
+        '            uniform token axis = "Z"',
+        f"            color3f[] primvars:displayColor = "
+        f"[({PUCK_COLOR[0]:.3f}, {PUCK_COLOR[1]:.3f}, {PUCK_COLOR[2]:.3f})]",
+        "        }",
+    ]
+
+
 def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
-                z_m: float, custom: dict) -> list:
+                z_m: float, custom: dict, child_lines=None) -> list:
     """Emit one xform prim with translate timeSamples + visibility toggles.
 
     samples_by_frame: dict[frame_idx] -> (ice_x_ft, ice_y_ft).
@@ -119,6 +166,9 @@ def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
             if e + 1 < total_frames:
                 lines.append(f'            {e + 1}: "invisible",')
         lines.append("        }")
+    # Embedded child geometry (capsule for players, cylinder for puck).
+    if child_lines:
+        lines.extend(child_lines)
     lines.append("    }")
     lines.append("")
     return lines
@@ -185,46 +235,76 @@ def main() -> None:
     L.append('def Xform "World" (kind = "assembly")')
     L.append("{")
 
-    # Rink placeholder
-    L.append('    def Xform "Rink" (')
-    L.append('        kind = "assembly"')
+    # Rink — reference the standalone rink asset built by build_rink_usd.py.
+    # The asset's defaultPrim ("Rink") provides the ice mesh, lines, dots,
+    # nets etc.; swap this reference for a photoreal rink USD when you have
+    # one (Omniverse marketplace asset, custom-modeled NHL arena, etc.).
+    L.append('    def "Rink" (')
+    L.append(f'        prepend references = @{RINK_ASSET_RELPATH}@</Rink>')
     L.append("    )")
     L.append("    {")
-    L.append("        # Placeholder for the hockey rink asset. Reference a real")
-    L.append("        # rink USD here for photoreal renders, e.g.:")
-    L.append('        #   prepend references = @rinks/nhl_arena.usda@')
-    L.append("        # The ice surface is the X-Y plane: x in [0, 60.96] m,")
-    L.append("        # y in [0, 25.908] m, with rounded corners (radius 8.53 m).")
     L.append("    }")
     L.append("")
 
-    # Players
+    # Players -- one Xform per ByteTrack id, each containing a capsule.
     L.append('    def Scope "Players"')
     L.append("    {")
     for tid in sorted(players):
         meta = players[tid].pop("_meta")
+        color = TEAM_COLORS.get(meta.get("team", "unknown"), TEAM_COLORS["unknown"])
+        cap = _capsule_lines(PLAYER_RADIUS_M, PLAYER_HEIGHT_M, color)
         for line in _emit_xform(f"p{tid}", players[tid], n_frames,
-                                z_m=0.0, custom=meta):
+                                z_m=0.0, custom=meta, child_lines=cap):
             L.append("    " + line)
     L.append("    }")
     L.append("")
 
-    # Goalies
+    # Goalies -- same but a wider radius to suggest pads.
     if goalies:
         L.append('    def Scope "Goalies"')
         L.append("    {")
         for tid in sorted(goalies):
             meta = goalies[tid].pop("_meta")
+            color = TEAM_COLORS.get(meta.get("team", "unknown"), TEAM_COLORS["unknown"])
+            cap = _capsule_lines(GOALIE_RADIUS_M, PLAYER_HEIGHT_M * 0.95, color)
             for line in _emit_xform(f"g{tid}", goalies[tid], n_frames,
-                                    z_m=0.0, custom=meta):
+                                    z_m=0.0, custom=meta, child_lines=cap):
                 L.append("    " + line)
         L.append("    }")
         L.append("")
 
-    # Puck
+    # Puck -- a small black cylinder sitting on the ice.
     for line in _emit_xform("Puck", puck_samples, n_frames,
-                            z_m=PUCK_Z_M, custom={}):
+                            z_m=PUCK_Z_M, custom={},
+                            child_lines=_puck_disc_lines()):
         L.append(line)
+
+    # Sun-style overhead light so renderers without a default light have one.
+    L.append('    def DistantLight "Sun"')
+    L.append("    {")
+    L.append("        float inputs:intensity = 2500")
+    L.append("        float inputs:angle = 1.5")
+    L.append('        double3 xformOp:rotateXYZ = (-55, 0, 35)')
+    L.append('        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]')
+    L.append("    }")
+    L.append("")
+
+    # Default top-down framing camera. Placed above rink centre, looking
+    # straight down. A user in Omniverse can switch to a free-fly or VR
+    # camera; this one is just a sensible default.
+    rink_l_m = RINK_LENGTH_FT * FT_TO_M
+    rink_w_m = RINK_WIDTH_FT * FT_TO_M
+    L.append('    def Camera "TopDown"')
+    L.append("    {")
+    L.append("        float focalLength = 35")
+    L.append("        float2 clippingRange = (0.1, 200)")
+    L.append(f"        double3 xformOp:translate = "
+             f"({rink_l_m/2:.3f}, {rink_w_m/2:.3f}, 55.0)")
+    L.append("        double3 xformOp:rotateXYZ = (0, 0, 0)")
+    L.append('        uniform token[] xformOpOrder = '
+             '["xformOp:translate", "xformOp:rotateXYZ"]')
+    L.append("    }")
+    L.append("")
 
     L.append("}")
     L.append("")
