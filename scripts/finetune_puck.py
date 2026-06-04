@@ -37,11 +37,23 @@ def main() -> None:
     ap.add_argument("--out", default="models/puck_nhl.pt",
                     help="where to write the fine-tuned weights")
     ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--imgsz", type=int, default=1920,
-                    help="match the inference imgsz (game_tracker uses 1920)")
+    ap.add_argument("--imgsz", type=int, default=1280,
+                    help="training imgsz. Inference can stay at 1920 -- YOLO "
+                         "is scale-flexible. 1280 (vs 1920) cuts per-image RAM "
+                         "from 11 MB to 5 MB, which matters during augmentation.")
     ap.add_argument("--batch", type=int, default=4,
                     help="lowered for 1920 imgsz on 8 GB VRAM")
     ap.add_argument("--patience", type=int, default=10)
+    ap.add_argument("--workers", type=int, default=0,
+                    help="dataloader workers. Default 0 (main-process only) "
+                         "to avoid Windows WinError 1455 paging-file failures "
+                         "when ultralytics spawns workers each loading torch.")
+    ap.add_argument("--mosaic", type=float, default=0.0,
+                    help="mosaic augmentation probability. Default 0 -- mosaic "
+                         "needs a 2x-imgsz buffer (18 MB at 1280) per sample "
+                         "that fails to allocate on memory-pressured Windows.")
+    ap.add_argument("--mixup", type=float, default=0.0,
+                    help="mixup augmentation probability (also memory-heavy).")
     ap.add_argument("--val-clip", default=None,
                     help="clip name to hold out for validation; default = the "
                          "last manifest alphabetically")
@@ -115,7 +127,10 @@ def main() -> None:
     model = YOLO(str(base))
     results = model.train(
         data=str(yaml_path), epochs=args.epochs, imgsz=args.imgsz,
-        batch=args.batch, patience=args.patience,
+        batch=args.batch, patience=args.patience, workers=args.workers,
+        cache=False,                        # no RAM-prefetch of the dataset
+        mosaic=args.mosaic, mixup=args.mixup,  # memory-heavy augmentations off
+        close_mosaic=0, amp=True,
         project=str(PROJECT_ROOT / "runs" / "detect"), name="puck_nhl",
         exist_ok=True, verbose=True,
     )
