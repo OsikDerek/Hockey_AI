@@ -33,11 +33,14 @@ CENTER_X = 100 * FT        # 30.48 m
 CENTER_Y = 42.5 * FT
 LINE_W = 0.3048            # 12 in (NHL line width approx)
 FACEOFF_DOT_R = 0.1524     # 6 in
+FACEOFF_CIRCLE_R = 15 * FT # 4.572 m radius (around end-zone dots)
+CREASE_R = 6 * FT          # 1.83 m crease radius (semicircle in front of goal)
 GOAL_W = 6 * FT            # 1.83 m wide
 GOAL_D = 4 * FT            # 1.22 m deep
 GOAL_H = 1.22              # 4 ft tall
 ICE_Z = 0.0
 PAINT_Z = 0.01             # just above ice to avoid z-fight
+PAINT_Z2 = 0.012           # second paint layer (over PAINT_Z)
 BOARD_H = 1.07             # 42 in glass+boards
 
 ICE_COLOR = (0.94, 0.96, 0.98)
@@ -167,6 +170,50 @@ def emit_goal_net(name: str, x, y, mouth_direction):
     return L
 
 
+def emit_circle_outline(name: str, cx, cy, radius, color, z, n_seg=64, width=0.05):
+    """A flat circle drawn as a closed linear BasisCurves loop."""
+    pts = []
+    for i in range(n_seg):
+        a = 2 * math.pi * i / n_seg
+        pts.append((cx + radius * math.cos(a), cy + radius * math.sin(a), z))
+    p_str = ", ".join(f"({x:.4f}, {y:.4f}, {z:.4f})" for x, y, z in pts)
+    return [
+        f'def BasisCurves "{name}"',
+        "{",
+        '    uniform token type = "linear"',
+        '    uniform token wrap = "periodic"',
+        f"    int[] curveVertexCounts = [{n_seg}]",
+        f"    point3f[] points = [{p_str}]",
+        f"    float[] widths = [{width}]",
+        '    uniform token widthsInterpolation = "constant"',
+        f"    color3f[] primvars:displayColor = [({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "}",
+        "",
+    ]
+
+
+def emit_crease_mesh(name: str, x, mouth_dir, radius, color, z, n_arc=24):
+    """Filled semicircular goal crease in front of the goal line at x,
+    facing inward (mouth_dir = +1 right-side goal, -1 left-side goal).
+    Triangle-fan from goal-line centre to arc points."""
+    # arc spans 180 degrees in the mouth direction; for left goal (mouth_dir=-1)
+    # the arc opens toward -x (into the offensive zone of the left side).
+    pts = [(x, 0.0, z)]  # centre on the goal line
+    # If mouth_dir = +1 (right goal): arc opens to the LEFT (negative x).
+    # If mouth_dir = -1 (left goal):  arc opens to the RIGHT (positive x).
+    sign = -mouth_dir
+    for i in range(n_arc + 1):
+        a = -math.pi / 2 + math.pi * i / n_arc   # -pi/2 .. +pi/2
+        ax = x + sign * radius * math.cos(a)
+        ay = radius * math.sin(a)
+        pts.append((ax, ay, z))
+    counts = [3] * n_arc
+    indices = []
+    for i in range(n_arc):
+        indices.extend([0, 1 + i, 2 + i])
+    return emit_mesh(name, pts, counts, indices, color)
+
+
 def emit_dot(name: str, x, y, color):
     """A small disk via Cylinder of height ~0."""
     return [
@@ -267,6 +314,34 @@ def main() -> None:
             dot_i += 1
             for line in emit_dot(f"NeutralDot_{dot_i}", x, y, RED):
                 L.append("    " + line if line else "")
+
+    # --- Faceoff circles (15 ft radius around the 4 end-zone dots) ---
+    circle_i = 0
+    for x in (-(CENTER_X - (GOAL_LINE_X_L + 20 * FT)),
+              (GOAL_LINE_X_R - 20 * FT) - CENTER_X):
+        for y in (-22 * FT, 22 * FT):
+            circle_i += 1
+            for line in emit_circle_outline(
+                    f"FaceoffCircle_{circle_i}", x, y,
+                    FACEOFF_CIRCLE_R, RED, PAINT_Z + 0.002, n_seg=64):
+                L.append("    " + line if line else "")
+
+    # --- Center-ice circle (15 ft radius, blue) ---
+    for line in emit_circle_outline("CenterCircle", 0, 0,
+                                     FACEOFF_CIRCLE_R, BLUE, PAINT_Z + 0.002):
+        L.append("    " + line if line else "")
+
+    # --- Goal creases (blue semicircle in front of each goal line) ---
+    # Left goal mouth opens to +x (into the offensive zone of the left side);
+    # right goal mouth opens to -x. emit_crease_mesh's mouth_dir flips the arc.
+    for line in emit_crease_mesh("CreaseL",
+                                  -(CENTER_X - GOAL_LINE_X_L), -1,
+                                  CREASE_R, (0.55, 0.78, 0.95), PAINT_Z2):
+        L.append("    " + line if line else "")
+    for line in emit_crease_mesh("CreaseR",
+                                  (GOAL_LINE_X_R - CENTER_X), 1,
+                                  CREASE_R, (0.55, 0.78, 0.95), PAINT_Z2):
+        L.append("    " + line if line else "")
 
     # --- Goal nets behind each goal line ---
     for line in emit_goal_net("NetL", -(CENTER_X - GOAL_LINE_X_L), 0, -1):
