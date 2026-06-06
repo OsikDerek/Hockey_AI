@@ -54,12 +54,15 @@ RINK_LENGTH_FT = 200.0
 RINK_WIDTH_FT = 85.0
 RINK_CORNER_RADIUS_FT = 28.0
 
-TEAM_COLORS = {
+DEFAULT_TEAM_COLORS = {
     "team_a": (0.16, 0.86, 0.20),
     "team_b": (0.18, 0.40, 0.92),
     "unknown": (0.62, 0.62, 0.62),
 }
 PUCK_COLOR = (0.05, 0.05, 0.05)
+SKIN_COLOR = (0.94, 0.79, 0.69)
+STICK_COLOR = (0.42, 0.26, 0.13)
+BLADE_COLOR = (0.20, 0.20, 0.22)
 
 # Path (relative to the output USD) of the rink asset to reference under
 # World/Rink. Built by scripts/build_rink_usd.py.
@@ -97,6 +100,95 @@ def _capsule_lines(radius: float, height: float, color) -> list:
         f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
         "        }",
     ]
+
+
+def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
+                    radius: float = PLAYER_RADIUS_M,
+                    is_goalie: bool = False) -> list:
+    """Stylised player: body capsule (team) + skin head + stick (skater)
+    or wider pads (goalie). All sub-prims in the player's LOCAL space, so
+    the parent xform's translate just slides the whole figure on the ice.
+    The skater faces local +X (no per-frame yaw yet -- that's the next step
+    once we add velocity-based facing)."""
+    body_h = height * 0.78           # ~1.4 m torso+legs
+    head_r = 0.17 if not is_goalie else 0.15
+    head_z = body_h + head_r * 0.6
+    L = []
+    # Body
+    L += [
+        '        def Capsule "Body"',
+        "        {",
+        f"            double radius = {radius}",
+        f"            double height = {max(0.01, body_h - 2 * radius)}",
+        '            uniform token axis = "Z"',
+        f"            double3 xformOp:translate = (0, 0, {body_h / 2})",
+        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({team_color[0]:.3f}, {team_color[1]:.3f}, {team_color[2]:.3f})]",
+        "        }",
+    ]
+    # Head
+    L += [
+        '        def Sphere "Head"',
+        "        {",
+        f"            double radius = {head_r}",
+        f"            double3 xformOp:translate = (0, 0, {head_z})",
+        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({SKIN_COLOR[0]:.3f}, {SKIN_COLOR[1]:.3f}, {SKIN_COLOR[2]:.3f})]",
+        "        }",
+    ]
+    if not is_goalie:
+        # Stick: shaft (long thin cylinder forward + slightly to the side)
+        # + blade (small flat box at the end). Local +X is "forward".
+        shaft_len = 1.5
+        shaft_x = shaft_len / 2 + 0.20  # offset out from the body
+        L += [
+            '        def Cylinder "StickShaft"',
+            "        {",
+            "            double radius = 0.025",
+            f"            double height = {shaft_len}",
+            '            uniform token axis = "X"',
+            f"            double3 xformOp:translate = ({shaft_x:.3f}, 0.20, 0.55)",
+            '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+            f"            color3f[] primvars:displayColor = "
+            f"[({STICK_COLOR[0]:.3f}, {STICK_COLOR[1]:.3f}, {STICK_COLOR[2]:.3f})]",
+            "        }",
+            '        def Cube "StickBlade"',
+            "        {",
+            "            double size = 1",
+            # 0.45 m long blade, ~0.02 thick, 0.06 wide at z~0.04 above ice
+            f"            matrix4d xformOp:transform = "
+            f"((0.45, 0, 0, 0), (0, 0.06, 0, 0), (0, 0, 0.025, 0),"
+            f" ({shaft_x + shaft_len / 2 + 0.18:.3f}, 0.25, 0.04, 1))",
+            '            uniform token[] xformOpOrder = ["xformOp:transform"]',
+            f"            color3f[] primvars:displayColor = "
+            f"[({BLADE_COLOR[0]:.3f}, {BLADE_COLOR[1]:.3f}, {BLADE_COLOR[2]:.3f})]",
+            "        }",
+        ]
+    else:
+        # Goalie: wider pad block in front of the body + blocker/glove cubes.
+        L += [
+            '        def Cube "Pads"',
+            "        {",
+            "            double size = 1",
+            # 0.95 m wide, 0.18 m deep, 0.95 m tall, slightly forward
+            f"            matrix4d xformOp:transform = "
+            f"((0.95, 0, 0, 0), (0, 0.18, 0, 0), (0, 0, 0.95, 0),"
+            f" (0.20, 0, 0.47, 1))",
+            '            uniform token[] xformOpOrder = ["xformOp:transform"]',
+            f"            color3f[] primvars:displayColor = "
+            f"[({team_color[0]:.3f}, {team_color[1]:.3f}, {team_color[2]:.3f})]",
+            "        }",
+        ]
+    return L
+
+
+def _parse_color(s: str):
+    parts = [float(x) for x in s.split(",")]
+    if len(parts) != 3 or not all(0.0 <= p <= 1.0 for p in parts):
+        raise ValueError(f"team color must be 'r,g,b' in [0,1], got {s!r}")
+    return tuple(parts)
 
 
 def _puck_disc_lines() -> list:
@@ -181,7 +273,18 @@ def main() -> None:
                     help="positions JSON path (default: output/<clip>_positions.json)")
     ap.add_argument("--out", default=None,
                     help="output USDA path (default: output/<clip>.usda)")
+    ap.add_argument("--team-a-color", default=None,
+                    help='comma-separated r,g,b in [0,1]; e.g. "0.85,0.12,0.16" '
+                         'for red. Override the default team_a colour.')
+    ap.add_argument("--team-b-color", default=None,
+                    help="same, for team_b.")
     args = ap.parse_args()
+
+    team_colors = dict(DEFAULT_TEAM_COLORS)
+    if args.team_a_color:
+        team_colors["team_a"] = _parse_color(args.team_a_color)
+    if args.team_b_color:
+        team_colors["team_b"] = _parse_color(args.team_b_color)
 
     pos_path = (Path(args.positions) if args.positions
                 else PROJECT_ROOT / "output" / f"{args.clip}_positions.json")
@@ -251,10 +354,11 @@ def main() -> None:
     L.append("    {")
     for tid in sorted(players):
         meta = players[tid].pop("_meta")
-        color = TEAM_COLORS.get(meta.get("team", "unknown"), TEAM_COLORS["unknown"])
-        cap = _capsule_lines(PLAYER_RADIUS_M, PLAYER_HEIGHT_M, color)
+        color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
+        avatar = _humanoid_lines(color, PLAYER_HEIGHT_M, PLAYER_RADIUS_M,
+                                  is_goalie=False)
         for line in _emit_xform(f"p{tid}", players[tid], n_frames,
-                                z_m=0.0, custom=meta, child_lines=cap):
+                                z_m=0.0, custom=meta, child_lines=avatar):
             L.append("    " + line)
     L.append("    }")
     L.append("")
@@ -265,10 +369,11 @@ def main() -> None:
         L.append("    {")
         for tid in sorted(goalies):
             meta = goalies[tid].pop("_meta")
-            color = TEAM_COLORS.get(meta.get("team", "unknown"), TEAM_COLORS["unknown"])
-            cap = _capsule_lines(GOALIE_RADIUS_M, PLAYER_HEIGHT_M * 0.95, color)
+            color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
+            avatar = _humanoid_lines(color, PLAYER_HEIGHT_M * 0.95,
+                                      GOALIE_RADIUS_M, is_goalie=True)
             for line in _emit_xform(f"g{tid}", goalies[tid], n_frames,
-                                    z_m=0.0, custom=meta, child_lines=cap):
+                                    z_m=0.0, custom=meta, child_lines=avatar):
                 L.append("    " + line)
         L.append("    }")
         L.append("")
