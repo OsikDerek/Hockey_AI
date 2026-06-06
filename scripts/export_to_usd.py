@@ -274,6 +274,53 @@ def _broadcast_camera_lines(rink_l_m: float, rink_w_m: float) -> list:
     ]
 
 
+def _puck_trail_lines(puck_samples: dict, n_trail: int = 30,
+                       w_head: float = 0.18, w_tail: float = 0.02) -> list:
+    """A fading line showing the puck's last N positions, time-sampled.
+
+    Single BasisCurves prim with a fixed vertex count (n_trail) and
+    per-vertex width interpolating tail->head; the points array is
+    re-emitted per frame as the trail slides forward. On the leading
+    edge of the clip (fewer than n_trail samples available) the array
+    is padded with the oldest available point so the curve always has
+    the same vertex count -- a quietly thin trail that grows in over
+    the first ~1 s of playback.
+    """
+    if not puck_samples:
+        return []
+    frames = sorted(puck_samples)
+    # Per-vertex widths: tail (index 0) thin, head (index n_trail-1) thick.
+    widths = ", ".join(
+        f"{w_tail + (w_head - w_tail) * (i / max(1, n_trail - 1)):.3f}"
+        for i in range(n_trail)
+    )
+    L = [
+        'def BasisCurves "PuckTrail"',
+        "{",
+        '    uniform token type = "linear"',
+        f"    int[] curveVertexCounts = [{n_trail}]",
+        f"    float[] widths = [{widths}]",
+        '    uniform token widthsInterpolation = "vertex"',
+        "    color3f[] primvars:displayColor = [(1.00, 0.62, 0.10)]",
+        "    point3f[] points.timeSamples = {",
+    ]
+    trail_z = PUCK_Z_M + 0.06   # just above the puck disc
+    for idx, f in enumerate(frames):
+        start = max(0, idx - n_trail + 1)
+        trail = [puck_samples[frames[j]] for j in range(start, idx + 1)]
+        while len(trail) < n_trail:
+            trail.insert(0, trail[0])
+        pts = ", ".join(
+            f"({x * FT_TO_M:.4f}, {y * FT_TO_M:.4f}, {trail_z:.4f})"
+            for x, y in trail
+        )
+        L.append(f"        {f}: [{pts}],")
+    L.append("    }")
+    L.append("}")
+    L.append("")
+    return L
+
+
 def _drone_camera_lines(puck_samples: dict) -> list:
     """A drone hovering above and slightly behind the puck. Static rotation
     (the geometry of being 3 m south + 12 m up of the puck is constant);
@@ -550,6 +597,10 @@ def main() -> None:
     # Drone follow cam: parented to nothing (world-level), translate
     # time-sampled to track the puck.
     for line in _drone_camera_lines(puck_samples):
+        L.append("    " + line if line else "")
+
+    # Fading puck trail (last ~1 s of puck history).
+    for line in _puck_trail_lines(puck_samples):
         L.append("    " + line if line else "")
 
     L.append("}")
