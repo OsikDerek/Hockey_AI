@@ -191,6 +191,117 @@ def _parse_color(s: str):
     return tuple(parts)
 
 
+def _compute_yaws(samples_by_frame: dict) -> dict:
+    """Per-frame Z-axis yaw (degrees) for a track, from its velocity.
+
+    A central-difference velocity yields a heading per frame; the heading
+    is held during near-stationary frames so the avatar doesn't spin when
+    standing still. Result drives a rotateZ.timeSamples on the parent
+    xform so the stick blade and any POV camera face the velocity dir.
+    """
+    frames = sorted(samples_by_frame)
+    if len(frames) < 2:
+        return {}
+    yaws = {}
+    last_yaw = None
+    for i, f in enumerate(frames):
+        if 0 < i < len(frames) - 1:
+            fp, fn = frames[i - 1], frames[i + 1]
+            if fn - fp <= 6:
+                x0, y0 = samples_by_frame[fp]
+                x1, y1 = samples_by_frame[fn]
+                dx, dy = x1 - x0, y1 - y0
+                if dx * dx + dy * dy > 0.04:   # > ~0.2 ft, real motion
+                    new_yaw = math.degrees(math.atan2(dy, dx))
+                    if last_yaw is not None:
+                        # blend toward new heading, handling angle wrap
+                        d = new_yaw - last_yaw
+                        while d > 180: d -= 360
+                        while d < -180: d += 360
+                        new_yaw = last_yaw + 0.5 * d
+                    yaws[f] = new_yaw
+                    last_yaw = new_yaw
+                    continue
+        # held (stationary or endpoint)
+        yaws[f] = last_yaw if last_yaw is not None else 0.0
+    return yaws
+
+
+def _pov_camera_lines(name: str = "POV") -> list:
+    """A camera inside a player xform; sits at the head, looks down local +X.
+
+    Combined with the parent xform's rotateZ.timeSamples this puts the
+    camera at eye height looking where the player is heading.
+    """
+    return [
+        f'        def Camera "{name}"',
+        "        {",
+        "            float focalLength = 24",
+        "            float horizontalAperture = 24",
+        "            float2 clippingRange = (0.05, 200)",
+        # 0.30 m forward of body centre, 1.55 m up = head height
+        "            double3 xformOp:translate = (0.30, 0, 1.55)",
+        # default cam looks down local -Z; rotate -90 around Y so it looks down +X
+        "            double3 xformOp:rotateXYZ = (0, -90, 0)",
+        '            uniform token[] xformOpOrder = '
+        '["xformOp:translate", "xformOp:rotateXYZ"]',
+        "        }",
+    ]
+
+
+def _broadcast_camera_lines(rink_l_m: float, rink_w_m: float) -> list:
+    """A static side-cam at rinkside elevated to mid-stand height, tilted
+    down toward centre ice. Pitch = atan2(rink_w/2 + 10, 10) deg around X."""
+    cam_x = rink_l_m / 2
+    cam_y = -10.0
+    cam_z = 10.0
+    # delta from cam to rink center (cam_x, rink_w/2, 0):
+    dy = rink_w_m / 2 - cam_y
+    dz = -cam_z
+    pitch = math.degrees(math.atan2(dy, -dz))   # cf. _compute_yaws derivation
+    return [
+        'def Camera "BroadcastCam"',
+        "{",
+        "    float focalLength = 35",
+        "    float2 clippingRange = (0.1, 300)",
+        f"    double3 xformOp:translate = ({cam_x:.3f}, {cam_y:.3f}, {cam_z:.3f})",
+        f"    double3 xformOp:rotateXYZ = ({pitch:.3f}, 0, 0)",
+        '    uniform token[] xformOpOrder = '
+        '["xformOp:translate", "xformOp:rotateXYZ"]',
+        "}",
+        "",
+    ]
+
+
+def _drone_camera_lines(puck_samples: dict) -> list:
+    """A drone hovering above and slightly behind the puck. Static rotation
+    (the geometry of being 3 m south + 12 m up of the puck is constant);
+    only the translate is time-sampled, matching the puck."""
+    if not puck_samples:
+        return []
+    pitch = math.degrees(math.atan2(3.0, 12.0))  # ~14 deg from straight down
+    L = [
+        'def Camera "DroneCam"',
+        "{",
+        "    float focalLength = 35",
+        "    float2 clippingRange = (0.1, 300)",
+        "    double3 xformOp:translate.timeSamples = {",
+    ]
+    for f in sorted(puck_samples):
+        x_ft, y_ft = puck_samples[f]
+        L.append(f"        {f}: ({x_ft * FT_TO_M:.4f},"
+                 f" {y_ft * FT_TO_M - 3.0:.4f}, 12.0),")
+    L.append("    }")
+    L += [
+        f"    double3 xformOp:rotateXYZ = ({pitch:.3f}, 0, 0)",
+        '    uniform token[] xformOpOrder = '
+        '["xformOp:translate", "xformOp:rotateXYZ"]',
+        "}",
+        "",
+    ]
+    return L
+
+
 def _puck_disc_lines() -> list:
     return [
         '        def Cylinder "Disc"',
@@ -205,7 +316,8 @@ def _puck_disc_lines() -> list:
 
 
 def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
-                z_m: float, custom: dict, child_lines=None) -> list:
+                z_m: float, custom: dict, child_lines=None,
+                yaws: dict = None) -> list:
     """Emit one xform prim with translate timeSamples + visibility toggles.
 
     samples_by_frame: dict[frame_idx] -> (ice_x_ft, ice_y_ft).
@@ -244,7 +356,16 @@ def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
             f"{y_ft * FT_TO_M:.4f}, {z_m:.4f}),"
         )
     lines.append("        }")
-    lines.append('        uniform token[] xformOpOrder = ["xformOp:translate"]')
+    # rotateZ time samples (drives stick + POV camera facing).
+    if yaws:
+        lines.append("        double xformOp:rotateZ.timeSamples = {")
+        for f in sorted(yaws):
+            lines.append(f"            {f}: {yaws[f]:.3f},")
+        lines.append("        }")
+        lines.append('        uniform token[] xformOpOrder = '
+                     '["xformOp:translate", "xformOp:rotateZ"]')
+    else:
+        lines.append('        uniform token[] xformOpOrder = ["xformOp:translate"]')
 
     # visibility: held-interpolation token. inherited at each run start,
     # invisible at the frame after each run ends.
@@ -349,7 +470,12 @@ def main() -> None:
     L.append("    }")
     L.append("")
 
-    # Players -- one Xform per ByteTrack id, each containing a capsule.
+    # Top-3 most-present players get an in-helmet POV camera. Counted on the
+    # raw sample dicts before _meta is popped.
+    pl_counts = {t: sum(1 for k in players[t] if k != "_meta") for t in players}
+    top_pov_ids = sorted(pl_counts, key=lambda t: -pl_counts[t])[:3]
+
+    # Players -- one Xform per ByteTrack id, each containing a humanoid.
     L.append('    def Scope "Players"')
     L.append("    {")
     for tid in sorted(players):
@@ -357,8 +483,13 @@ def main() -> None:
         color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
         avatar = _humanoid_lines(color, PLAYER_HEIGHT_M, PLAYER_RADIUS_M,
                                   is_goalie=False)
+        if tid in top_pov_ids:
+            avatar = avatar + _pov_camera_lines("POV")
+        # Per-frame yaw from velocity drives the stick + POV camera facing.
+        yaws = _compute_yaws(players[tid])
         for line in _emit_xform(f"p{tid}", players[tid], n_frames,
-                                z_m=0.0, custom=meta, child_lines=avatar):
+                                z_m=0.0, custom=meta,
+                                child_lines=avatar, yaws=yaws):
             L.append("    " + line)
     L.append("    }")
     L.append("")
@@ -410,6 +541,15 @@ def main() -> None:
              '["xformOp:translate", "xformOp:rotateXYZ"]')
     L.append("    }")
     L.append("")
+
+    # Broadcast side cam: static, rinkside, looking at centre ice.
+    for line in _broadcast_camera_lines(rink_l_m, rink_w_m):
+        L.append("    " + line if line else "")
+
+    # Drone follow cam: parented to nothing (world-level), translate
+    # time-sampled to track the puck.
+    for line in _drone_camera_lines(puck_samples):
+        L.append("    " + line if line else "")
 
     L.append("}")
     L.append("")
