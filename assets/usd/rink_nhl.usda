@@ -16,8 +16,129 @@ def Xform "Rink" (kind = "assembly")
     double3 xformOp:translate = (30.4800, 12.9540, 0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
 
+    def Scope "Looks"
+    {
+        def Material "IceMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/IceMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.930, 0.960, 1.000)
+                float inputs:roughness = 0.05
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                float inputs:clearcoat = 1.0
+                float inputs:clearcoatRoughness = 0.03
+                token outputs:surface
+            }
+        }
+
+        def Material "RedPaint"
+        {
+            token outputs:surface.connect = </Rink/Looks/RedPaint/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.850, 0.120, 0.160)
+                float inputs:roughness = 0.35
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+        def Material "BluePaint"
+        {
+            token outputs:surface.connect = </Rink/Looks/BluePaint/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.130, 0.430, 0.830)
+                float inputs:roughness = 0.35
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+        def Material "CreaseMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/CreaseMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.550, 0.780, 0.950)
+                float inputs:roughness = 0.18
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                float inputs:clearcoat = 0.6
+                float inputs:clearcoatRoughness = 0.08
+                token outputs:surface
+            }
+        }
+
+        def Material "BoardMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/BoardMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.960, 0.960, 0.970)
+                float inputs:roughness = 0.45
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+        def Material "KickplateMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/KickplateMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.920, 0.780, 0.120)
+                float inputs:roughness = 0.5
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+        def Material "NetMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/NetMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.950, 0.950, 0.950)
+                float inputs:roughness = 0.7
+                float inputs:metallic = 0.0
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+        def Material "NetPostMat"
+        {
+            token outputs:surface.connect = </Rink/Looks/NetPostMat/Shader.outputs:surface>
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.800, 0.070, 0.110)
+                float inputs:roughness = 0.3
+                float inputs:metallic = 0.1
+                int inputs:useSpecularWorkflow = 0
+                token outputs:surface
+            }
+        }
+
+    }
+
     def Mesh "Ice"
     {
+        rel material:binding = </Rink/Looks/IceMat>
         point3f[] points = [(0.0000, -0.5182, 0.0000), (-21.9456, -12.9540, 0.0000), (21.9456, -12.9540, 0.0000), (23.0596, -12.8810, 0.0000), (24.1545, -12.6632, 0.0000), (25.2116, -12.3044, 0.0000), (26.2128, -11.8106, 0.0000), (27.1410, -11.1904, 0.0000), (27.9803, -10.4543, 0.0000), (28.7164, -9.6150, 0.0000), (29.3366, -8.6868, 0.0000), (29.8304, -7.6856, 0.0000), (30.1892, -6.6285, 0.0000), (30.4070, -5.5336, 0.0000), (30.4800, -4.4196, 0.0000), (30.4070, 5.5336, 0.0000), (30.1892, 6.6285, 0.0000), (29.8304, 7.6856, 0.0000), (29.3366, 8.6868, 0.0000), (28.7164, 9.6150, 0.0000), (27.9803, 10.4543, 0.0000), (27.1410, 11.1904, 0.0000), (26.2128, 11.8106, 0.0000), (25.2116, 12.3044, 0.0000), (24.1545, 12.6632, 0.0000), (23.0596, 12.8810, 0.0000), (21.9456, 12.9540, 0.0000), (-23.0596, 12.8810, 0.0000), (-24.1545, 12.6632, 0.0000), (-25.2116, 12.3044, 0.0000), (-26.2128, 11.8106, 0.0000), (-27.1410, 11.1904, 0.0000), (-27.9803, 10.4543, 0.0000), (-28.7164, 9.6150, 0.0000), (-29.3366, 8.6868, 0.0000), (-29.8304, 7.6856, 0.0000), (-30.1892, 6.6285, 0.0000), (-30.4070, 5.5336, 0.0000), (-30.4800, 4.4196, 0.0000), (-30.4070, -5.5336, 0.0000), (-30.1892, -6.6285, 0.0000), (-29.8304, -7.6856, 0.0000), (-29.3366, -8.6868, 0.0000), (-28.7164, -9.6150, 0.0000), (-27.9803, -10.4543, 0.0000), (-27.1410, -11.1904, 0.0000), (-26.2128, -11.8106, 0.0000), (-25.2116, -12.3044, 0.0000), (-24.1545, -12.6632, 0.0000), (-23.0596, -12.8810, 0.0000), (-21.9456, -12.9540, 0.0000)]
         int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
         int[] faceVertexIndices = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 8, 0, 8, 9, 0, 9, 10, 0, 10, 11, 0, 11, 12, 0, 12, 13, 0, 13, 14, 0, 14, 15, 0, 15, 16, 0, 16, 17, 0, 17, 18, 0, 18, 19, 0, 19, 20, 0, 20, 21, 0, 21, 22, 0, 22, 23, 0, 23, 24, 0, 24, 25, 0, 25, 26, 0, 26, 27, 0, 27, 28, 0, 28, 29, 0, 29, 30, 0, 30, 31, 0, 31, 32, 0, 32, 33, 0, 33, 34, 0, 34, 35, 0, 35, 36, 0, 36, 37, 0, 37, 38, 0, 38, 39, 0, 39, 40, 0, 40, 41, 0, 41, 42, 0, 42, 43, 0, 43, 44, 0, 44, 45, 0, 45, 46, 0, 46, 47, 0, 47, 48, 0, 48, 49, 0, 49, 50, 0, 50, 1]
@@ -25,8 +146,29 @@ def Xform "Rink" (kind = "assembly")
         uniform bool doubleSided = true
     }
 
+    def Mesh "Boards"
+    {
+        rel material:binding = </Rink/Looks/BoardMat>
+        point3f[] points = [(-21.9456, -12.9540, 0.2000), (21.9456, -12.9540, 0.2000), (23.0596, -12.8810, 0.2000), (24.1545, -12.6632, 0.2000), (25.2116, -12.3044, 0.2000), (26.2128, -11.8106, 0.2000), (27.1410, -11.1904, 0.2000), (27.9803, -10.4543, 0.2000), (28.7164, -9.6150, 0.2000), (29.3366, -8.6868, 0.2000), (29.8304, -7.6856, 0.2000), (30.1892, -6.6285, 0.2000), (30.4070, -5.5336, 0.2000), (30.4800, -4.4196, 0.2000), (30.4070, 5.5336, 0.2000), (30.1892, 6.6285, 0.2000), (29.8304, 7.6856, 0.2000), (29.3366, 8.6868, 0.2000), (28.7164, 9.6150, 0.2000), (27.9803, 10.4543, 0.2000), (27.1410, 11.1904, 0.2000), (26.2128, 11.8106, 0.2000), (25.2116, 12.3044, 0.2000), (24.1545, 12.6632, 0.2000), (23.0596, 12.8810, 0.2000), (21.9456, 12.9540, 0.2000), (-23.0596, 12.8810, 0.2000), (-24.1545, 12.6632, 0.2000), (-25.2116, 12.3044, 0.2000), (-26.2128, 11.8106, 0.2000), (-27.1410, 11.1904, 0.2000), (-27.9803, 10.4543, 0.2000), (-28.7164, 9.6150, 0.2000), (-29.3366, 8.6868, 0.2000), (-29.8304, 7.6856, 0.2000), (-30.1892, 6.6285, 0.2000), (-30.4070, 5.5336, 0.2000), (-30.4800, 4.4196, 0.2000), (-30.4070, -5.5336, 0.2000), (-30.1892, -6.6285, 0.2000), (-29.8304, -7.6856, 0.2000), (-29.3366, -8.6868, 0.2000), (-28.7164, -9.6150, 0.2000), (-27.9803, -10.4543, 0.2000), (-27.1410, -11.1904, 0.2000), (-26.2128, -11.8106, 0.2000), (-25.2116, -12.3044, 0.2000), (-24.1545, -12.6632, 0.2000), (-23.0596, -12.8810, 0.2000), (-21.9456, -12.9540, 0.2000), (-21.9456, -12.9540, 1.0700), (21.9456, -12.9540, 1.0700), (23.0596, -12.8810, 1.0700), (24.1545, -12.6632, 1.0700), (25.2116, -12.3044, 1.0700), (26.2128, -11.8106, 1.0700), (27.1410, -11.1904, 1.0700), (27.9803, -10.4543, 1.0700), (28.7164, -9.6150, 1.0700), (29.3366, -8.6868, 1.0700), (29.8304, -7.6856, 1.0700), (30.1892, -6.6285, 1.0700), (30.4070, -5.5336, 1.0700), (30.4800, -4.4196, 1.0700), (30.4070, 5.5336, 1.0700), (30.1892, 6.6285, 1.0700), (29.8304, 7.6856, 1.0700), (29.3366, 8.6868, 1.0700), (28.7164, 9.6150, 1.0700), (27.9803, 10.4543, 1.0700), (27.1410, 11.1904, 1.0700), (26.2128, 11.8106, 1.0700), (25.2116, 12.3044, 1.0700), (24.1545, 12.6632, 1.0700), (23.0596, 12.8810, 1.0700), (21.9456, 12.9540, 1.0700), (-23.0596, 12.8810, 1.0700), (-24.1545, 12.6632, 1.0700), (-25.2116, 12.3044, 1.0700), (-26.2128, 11.8106, 1.0700), (-27.1410, 11.1904, 1.0700), (-27.9803, 10.4543, 1.0700), (-28.7164, 9.6150, 1.0700), (-29.3366, 8.6868, 1.0700), (-29.8304, 7.6856, 1.0700), (-30.1892, 6.6285, 1.0700), (-30.4070, 5.5336, 1.0700), (-30.4800, 4.4196, 1.0700), (-30.4070, -5.5336, 1.0700), (-30.1892, -6.6285, 1.0700), (-29.8304, -7.6856, 1.0700), (-29.3366, -8.6868, 1.0700), (-28.7164, -9.6150, 1.0700), (-27.9803, -10.4543, 1.0700), (-27.1410, -11.1904, 1.0700), (-26.2128, -11.8106, 1.0700), (-25.2116, -12.3044, 1.0700), (-24.1545, -12.6632, 1.0700), (-23.0596, -12.8810, 1.0700), (-21.9456, -12.9540, 1.0700)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 51, 50, 1, 2, 52, 51, 2, 3, 53, 52, 3, 4, 54, 53, 4, 5, 55, 54, 5, 6, 56, 55, 6, 7, 57, 56, 7, 8, 58, 57, 8, 9, 59, 58, 9, 10, 60, 59, 10, 11, 61, 60, 11, 12, 62, 61, 12, 13, 63, 62, 13, 14, 64, 63, 14, 15, 65, 64, 15, 16, 66, 65, 16, 17, 67, 66, 17, 18, 68, 67, 18, 19, 69, 68, 19, 20, 70, 69, 20, 21, 71, 70, 21, 22, 72, 71, 22, 23, 73, 72, 23, 24, 74, 73, 24, 25, 75, 74, 25, 26, 76, 75, 26, 27, 77, 76, 27, 28, 78, 77, 28, 29, 79, 78, 29, 30, 80, 79, 30, 31, 81, 80, 31, 32, 82, 81, 32, 33, 83, 82, 33, 34, 84, 83, 34, 35, 85, 84, 35, 36, 86, 85, 36, 37, 87, 86, 37, 38, 88, 87, 38, 39, 89, 88, 39, 40, 90, 89, 40, 41, 91, 90, 41, 42, 92, 91, 42, 43, 93, 92, 43, 44, 94, 93, 44, 45, 95, 94, 45, 46, 96, 95, 46, 47, 97, 96, 47, 48, 98, 97, 48, 49, 99, 98, 49, 0, 50, 99]
+        color3f[] primvars:displayColor = [(0.960, 0.960, 0.970)]
+        uniform bool doubleSided = true
+    }
+
+    def Mesh "Kickplate"
+    {
+        rel material:binding = </Rink/Looks/KickplateMat>
+        point3f[] points = [(-21.9456, -12.9540, 0.0000), (21.9456, -12.9540, 0.0000), (23.0596, -12.8810, 0.0000), (24.1545, -12.6632, 0.0000), (25.2116, -12.3044, 0.0000), (26.2128, -11.8106, 0.0000), (27.1410, -11.1904, 0.0000), (27.9803, -10.4543, 0.0000), (28.7164, -9.6150, 0.0000), (29.3366, -8.6868, 0.0000), (29.8304, -7.6856, 0.0000), (30.1892, -6.6285, 0.0000), (30.4070, -5.5336, 0.0000), (30.4800, -4.4196, 0.0000), (30.4070, 5.5336, 0.0000), (30.1892, 6.6285, 0.0000), (29.8304, 7.6856, 0.0000), (29.3366, 8.6868, 0.0000), (28.7164, 9.6150, 0.0000), (27.9803, 10.4543, 0.0000), (27.1410, 11.1904, 0.0000), (26.2128, 11.8106, 0.0000), (25.2116, 12.3044, 0.0000), (24.1545, 12.6632, 0.0000), (23.0596, 12.8810, 0.0000), (21.9456, 12.9540, 0.0000), (-23.0596, 12.8810, 0.0000), (-24.1545, 12.6632, 0.0000), (-25.2116, 12.3044, 0.0000), (-26.2128, 11.8106, 0.0000), (-27.1410, 11.1904, 0.0000), (-27.9803, 10.4543, 0.0000), (-28.7164, 9.6150, 0.0000), (-29.3366, 8.6868, 0.0000), (-29.8304, 7.6856, 0.0000), (-30.1892, 6.6285, 0.0000), (-30.4070, 5.5336, 0.0000), (-30.4800, 4.4196, 0.0000), (-30.4070, -5.5336, 0.0000), (-30.1892, -6.6285, 0.0000), (-29.8304, -7.6856, 0.0000), (-29.3366, -8.6868, 0.0000), (-28.7164, -9.6150, 0.0000), (-27.9803, -10.4543, 0.0000), (-27.1410, -11.1904, 0.0000), (-26.2128, -11.8106, 0.0000), (-25.2116, -12.3044, 0.0000), (-24.1545, -12.6632, 0.0000), (-23.0596, -12.8810, 0.0000), (-21.9456, -12.9540, 0.0000), (-21.9456, -12.9540, 0.2000), (21.9456, -12.9540, 0.2000), (23.0596, -12.8810, 0.2000), (24.1545, -12.6632, 0.2000), (25.2116, -12.3044, 0.2000), (26.2128, -11.8106, 0.2000), (27.1410, -11.1904, 0.2000), (27.9803, -10.4543, 0.2000), (28.7164, -9.6150, 0.2000), (29.3366, -8.6868, 0.2000), (29.8304, -7.6856, 0.2000), (30.1892, -6.6285, 0.2000), (30.4070, -5.5336, 0.2000), (30.4800, -4.4196, 0.2000), (30.4070, 5.5336, 0.2000), (30.1892, 6.6285, 0.2000), (29.8304, 7.6856, 0.2000), (29.3366, 8.6868, 0.2000), (28.7164, 9.6150, 0.2000), (27.9803, 10.4543, 0.2000), (27.1410, 11.1904, 0.2000), (26.2128, 11.8106, 0.2000), (25.2116, 12.3044, 0.2000), (24.1545, 12.6632, 0.2000), (23.0596, 12.8810, 0.2000), (21.9456, 12.9540, 0.2000), (-23.0596, 12.8810, 0.2000), (-24.1545, 12.6632, 0.2000), (-25.2116, 12.3044, 0.2000), (-26.2128, 11.8106, 0.2000), (-27.1410, 11.1904, 0.2000), (-27.9803, 10.4543, 0.2000), (-28.7164, 9.6150, 0.2000), (-29.3366, 8.6868, 0.2000), (-29.8304, 7.6856, 0.2000), (-30.1892, 6.6285, 0.2000), (-30.4070, 5.5336, 0.2000), (-30.4800, 4.4196, 0.2000), (-30.4070, -5.5336, 0.2000), (-30.1892, -6.6285, 0.2000), (-29.8304, -7.6856, 0.2000), (-29.3366, -8.6868, 0.2000), (-28.7164, -9.6150, 0.2000), (-27.9803, -10.4543, 0.2000), (-27.1410, -11.1904, 0.2000), (-26.2128, -11.8106, 0.2000), (-25.2116, -12.3044, 0.2000), (-24.1545, -12.6632, 0.2000), (-23.0596, -12.8810, 0.2000), (-21.9456, -12.9540, 0.2000)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 51, 50, 1, 2, 52, 51, 2, 3, 53, 52, 3, 4, 54, 53, 4, 5, 55, 54, 5, 6, 56, 55, 6, 7, 57, 56, 7, 8, 58, 57, 8, 9, 59, 58, 9, 10, 60, 59, 10, 11, 61, 60, 11, 12, 62, 61, 12, 13, 63, 62, 13, 14, 64, 63, 14, 15, 65, 64, 15, 16, 66, 65, 16, 17, 67, 66, 17, 18, 68, 67, 18, 19, 69, 68, 19, 20, 70, 69, 20, 21, 71, 70, 21, 22, 72, 71, 22, 23, 73, 72, 23, 24, 74, 73, 24, 25, 75, 74, 25, 26, 76, 75, 26, 27, 77, 76, 27, 28, 78, 77, 28, 29, 79, 78, 29, 30, 80, 79, 30, 31, 81, 80, 31, 32, 82, 81, 32, 33, 83, 82, 33, 34, 84, 83, 34, 35, 85, 84, 35, 36, 86, 85, 36, 37, 87, 86, 37, 38, 88, 87, 38, 39, 89, 88, 39, 40, 90, 89, 40, 41, 91, 90, 41, 42, 92, 91, 42, 43, 93, 92, 43, 44, 94, 93, 44, 45, 95, 94, 45, 46, 96, 95, 46, 47, 97, 96, 47, 48, 98, 97, 48, 49, 99, 98, 49, 0, 50, 99]
+        color3f[] primvars:displayColor = [(0.920, 0.780, 0.120)]
+        uniform bool doubleSided = true
+    }
+
     def Mesh "CenterLine"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         point3f[] points = [(-0.1524, -12.9540, 0.0100), (0.1524, -12.9540, 0.0100), (0.1524, 12.9540, 0.0100), (-0.1524, 12.9540, 0.0100)]
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
@@ -36,6 +178,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "CenterDot"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -46,6 +189,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "BlueLineL"
     {
+        rel material:binding = </Rink/Looks/BluePaint>
         point3f[] points = [(-7.7724, -12.9540, 0.0100), (-7.4676, -12.9540, 0.0100), (-7.4676, 12.9540, 0.0100), (-7.7724, 12.9540, 0.0100)]
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
@@ -55,6 +199,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "BlueLineR"
     {
+        rel material:binding = </Rink/Looks/BluePaint>
         point3f[] points = [(7.4676, -12.9540, 0.0100), (7.7724, -12.9540, 0.0100), (7.7724, 12.9540, 0.0100), (7.4676, 12.9540, 0.0100)]
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
@@ -64,6 +209,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "GoalLineL"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         point3f[] points = [(-27.2796, -11.2010, 0.0100), (-26.9748, -11.2010, 0.0100), (-26.9748, 11.2010, 0.0100), (-27.2796, 11.2010, 0.0100)]
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
@@ -73,6 +219,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "GoalLineR"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         point3f[] points = [(26.9748, -11.2010, 0.0100), (27.2796, -11.2010, 0.0100), (27.2796, 11.2010, 0.0100), (26.9748, 11.2010, 0.0100)]
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
@@ -82,6 +229,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "EndZoneDot_1"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -92,6 +240,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "EndZoneDot_2"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -102,6 +251,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "EndZoneDot_3"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -112,6 +262,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "EndZoneDot_4"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -122,6 +273,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "NeutralDot_1"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -132,6 +284,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "NeutralDot_2"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -142,6 +295,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "NeutralDot_3"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -152,6 +306,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Cylinder "NeutralDot_4"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         double radius = 0.1524
         double height = 0.005
         uniform token axis = "Z"
@@ -162,6 +317,7 @@ def Xform "Rink" (kind = "assembly")
 
     def BasisCurves "FaceoffCircle_1"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         uniform token type = "linear"
         uniform token wrap = "periodic"
         int[] curveVertexCounts = [64]
@@ -173,6 +329,7 @@ def Xform "Rink" (kind = "assembly")
 
     def BasisCurves "FaceoffCircle_2"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         uniform token type = "linear"
         uniform token wrap = "periodic"
         int[] curveVertexCounts = [64]
@@ -184,6 +341,7 @@ def Xform "Rink" (kind = "assembly")
 
     def BasisCurves "FaceoffCircle_3"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         uniform token type = "linear"
         uniform token wrap = "periodic"
         int[] curveVertexCounts = [64]
@@ -195,6 +353,7 @@ def Xform "Rink" (kind = "assembly")
 
     def BasisCurves "FaceoffCircle_4"
     {
+        rel material:binding = </Rink/Looks/RedPaint>
         uniform token type = "linear"
         uniform token wrap = "periodic"
         int[] curveVertexCounts = [64]
@@ -206,6 +365,7 @@ def Xform "Rink" (kind = "assembly")
 
     def BasisCurves "CenterCircle"
     {
+        rel material:binding = </Rink/Looks/BluePaint>
         uniform token type = "linear"
         uniform token wrap = "periodic"
         int[] curveVertexCounts = [64]
@@ -217,6 +377,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "CreaseL"
     {
+        rel material:binding = </Rink/Looks/CreaseMat>
         point3f[] points = [(-27.1272, 0.0000, 0.0120), (-27.1272, -1.8288, 0.0120), (-26.8885, -1.8132, 0.0120), (-26.6539, -1.7665, 0.0120), (-26.4273, -1.6896, 0.0120), (-26.2128, -1.5838, 0.0120), (-26.0139, -1.4509, 0.0120), (-25.8340, -1.2932, 0.0120), (-25.6763, -1.1133, 0.0120), (-25.5434, -0.9144, 0.0120), (-25.4376, -0.6999, 0.0120), (-25.3607, -0.4733, 0.0120), (-25.3140, -0.2387, 0.0120), (-25.2984, 0.0000, 0.0120), (-25.3140, 0.2387, 0.0120), (-25.3607, 0.4733, 0.0120), (-25.4376, 0.6999, 0.0120), (-25.5434, 0.9144, 0.0120), (-25.6763, 1.1133, 0.0120), (-25.8340, 1.2932, 0.0120), (-26.0139, 1.4509, 0.0120), (-26.2128, 1.5838, 0.0120), (-26.4273, 1.6896, 0.0120), (-26.6539, 1.7665, 0.0120), (-26.8885, 1.8132, 0.0120), (-27.1272, 1.8288, 0.0120)]
         int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
         int[] faceVertexIndices = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 8, 0, 8, 9, 0, 9, 10, 0, 10, 11, 0, 11, 12, 0, 12, 13, 0, 13, 14, 0, 14, 15, 0, 15, 16, 0, 16, 17, 0, 17, 18, 0, 18, 19, 0, 19, 20, 0, 20, 21, 0, 21, 22, 0, 22, 23, 0, 23, 24, 0, 24, 25]
@@ -226,6 +387,7 @@ def Xform "Rink" (kind = "assembly")
 
     def Mesh "CreaseR"
     {
+        rel material:binding = </Rink/Looks/CreaseMat>
         point3f[] points = [(27.1272, 0.0000, 0.0120), (27.1272, -1.8288, 0.0120), (26.8885, -1.8132, 0.0120), (26.6539, -1.7665, 0.0120), (26.4273, -1.6896, 0.0120), (26.2128, -1.5838, 0.0120), (26.0139, -1.4509, 0.0120), (25.8340, -1.2932, 0.0120), (25.6763, -1.1133, 0.0120), (25.5434, -0.9144, 0.0120), (25.4376, -0.6999, 0.0120), (25.3607, -0.4733, 0.0120), (25.3140, -0.2387, 0.0120), (25.2984, 0.0000, 0.0120), (25.3140, 0.2387, 0.0120), (25.3607, 0.4733, 0.0120), (25.4376, 0.6999, 0.0120), (25.5434, 0.9144, 0.0120), (25.6763, 1.1133, 0.0120), (25.8340, 1.2932, 0.0120), (26.0139, 1.4509, 0.0120), (26.2128, 1.5838, 0.0120), (26.4273, 1.6896, 0.0120), (26.6539, 1.7665, 0.0120), (26.8885, 1.8132, 0.0120), (27.1272, 1.8288, 0.0120)]
         int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
         int[] faceVertexIndices = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 8, 0, 8, 9, 0, 9, 10, 0, 10, 11, 0, 11, 12, 0, 12, 13, 0, 13, 14, 0, 14, 15, 0, 15, 16, 0, 16, 17, 0, 17, 18, 0, 18, 19, 0, 19, 20, 0, 20, 21, 0, 21, 22, 0, 22, 23, 0, 23, 24, 0, 24, 25]
@@ -237,6 +399,7 @@ def Xform "Rink" (kind = "assembly")
     {
         def Cube "Back"
         {
+            rel material:binding = </Rink/Looks/NetMat>
             double size = 1
             matrix4d xformOp:transform = ( (0.0732, 0, 0, 0), (0, 1.8288, 0, 0), (0, 0, 1.2200, 0), (-28.3464, 0.0000, 0.6100, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -244,6 +407,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Post1"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.22
             uniform token axis = "Z"
@@ -253,6 +417,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Post2"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.22
             uniform token axis = "Z"
@@ -262,6 +427,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Crossbar"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.8288000000000002
             uniform token axis = "Y"
@@ -275,6 +441,7 @@ def Xform "Rink" (kind = "assembly")
     {
         def Cube "Back"
         {
+            rel material:binding = </Rink/Looks/NetMat>
             double size = 1
             matrix4d xformOp:transform = ( (0.0732, 0, 0, 0), (0, 1.8288, 0, 0), (0, 0, 1.2200, 0), (28.3464, 0.0000, 0.6100, 1) )
             uniform token[] xformOpOrder = ["xformOp:transform"]
@@ -282,6 +449,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Post1"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.22
             uniform token axis = "Z"
@@ -291,6 +459,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Post2"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.22
             uniform token axis = "Z"
@@ -300,6 +469,7 @@ def Xform "Rink" (kind = "assembly")
         }
         def Cylinder "Crossbar"
         {
+            rel material:binding = </Rink/Looks/NetPostMat>
             double radius = 0.04
             double height = 1.8288000000000002
             uniform token axis = "Y"

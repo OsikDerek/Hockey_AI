@@ -1,11 +1,16 @@
 """Generate a standalone NHL rink USD asset.
 
 Produces assets/usd/rink_nhl.usda -- a self-contained USDA scene with the
-ice surface (rounded-rect mesh), boards, painted lines (center red, two
-blue lines, two goal lines), the nine faceoff dots, and the two goal
-nets. Solid-color via displayColor so it renders in any USD viewer
-(Omniverse Composer, Blender USD, Unreal USD, Houdini, omniverse-kit)
-without needing UsdShade materials.
+ice surface (rounded-rect mesh), perimeter boards, painted lines (center
+red, two blue lines, two goal lines), the nine faceoff dots, faceoff
+circles, goal creases, and the two goal nets.
+
+Geometry carries BOTH a flat displayColor (so it renders in any USD
+viewer with no materials) AND a bound UsdPreviewSurface material (so
+RTX / path-traced renderers give the glossy reflective "broadcast ice"
+look). UsdPreviewSurface is the portable PBR shader -- it renders in
+Omniverse RTX, Blender, usdview/Storm, Houdini and Unreal alike, so we
+don't lock the asset to Omniverse-only MDL.
 
 Generated once and committed; export_to_usd.py references it from World/Rink.
 Re-run only when the rink design itself changes:
@@ -41,16 +46,67 @@ GOAL_H = 1.22              # 4 ft tall
 ICE_Z = 0.0
 PAINT_Z = 0.01             # just above ice to avoid z-fight
 PAINT_Z2 = 0.012           # second paint layer (over PAINT_Z)
-BOARD_H = 1.07             # 42 in glass+boards
+BOARD_H = 1.07             # 42 in boards
+KICKPLATE_H = 0.20         # yellow kickplate stripe at base of boards
 
 ICE_COLOR = (0.94, 0.96, 0.98)
 RED = (0.85, 0.12, 0.16)
 BLUE = (0.13, 0.43, 0.83)
-BOARD_COLOR = (0.94, 0.88, 0.65)
+CREASE_COLOR = (0.55, 0.78, 0.95)
+BOARD_COLOR = (0.96, 0.96, 0.97)
+KICKPLATE_COLOR = (0.92, 0.78, 0.12)
 NET_COLOR = (0.95, 0.95, 0.95)
 NET_POST = (0.80, 0.07, 0.11)
 
+# Where the material prims live inside this asset. When the asset is
+# referenced under World/Rink, USD remaps these paths to
+# </World/Rink/Looks/...> automatically (the targets are inside the
+# referenced subtree), so bindings keep working.
+LOOKS_ROOT = "/Rink/Looks"
 
+
+# --------------------------------------------------------------------------
+# Materials
+# --------------------------------------------------------------------------
+def emit_preview_material(name, diffuse, roughness=0.5, metallic=0.0,
+                          clearcoat=0.0, clearcoat_roughness=0.01,
+                          opacity=1.0, specular=0.5):
+    """A UsdPreviewSurface material under LOOKS_ROOT. Returns USDA lines."""
+    r, g, b = diffuse
+    L = [
+        f'def Material "{name}"',
+        "{",
+        f"    token outputs:surface.connect = "
+        f"<{LOOKS_ROOT}/{name}/Shader.outputs:surface>",
+        '    def Shader "Shader"',
+        "    {",
+        '        uniform token info:id = "UsdPreviewSurface"',
+        f"        color3f inputs:diffuseColor = ({r:.3f}, {g:.3f}, {b:.3f})",
+        f"        float inputs:roughness = {roughness}",
+        f"        float inputs:metallic = {metallic}",
+        "        int inputs:useSpecularWorkflow = 0",
+    ]
+    if clearcoat:
+        L.append(f"        float inputs:clearcoat = {clearcoat}")
+        L.append(f"        float inputs:clearcoatRoughness = {clearcoat_roughness}")
+    if opacity < 1.0:
+        L.append(f"        float inputs:opacity = {opacity}")
+    L += [
+        "        token outputs:surface",
+        "    }",
+        "}",
+        "",
+    ]
+    return L
+
+
+def _binding(material):
+    return [f"    rel material:binding = <{material}>"] if material else []
+
+
+# --------------------------------------------------------------------------
+# Geometry helpers
+# --------------------------------------------------------------------------
 def rounded_rect_outline(length, width, radius, n_arc=12):
     """Return a list of (x, y) points around a centered rounded rectangle."""
     hl, hw = length / 2, width / 2
@@ -100,8 +156,25 @@ def rect_mesh(cx, cy, w, h, z, axis_aligned=True):
     return points, [4], [0, 1, 2, 3]
 
 
-def emit_mesh(name: str, points, face_counts, face_indices, color, doubleSided=True):
-    """Emit USDA def for a Mesh prim with displayColor."""
+def wall_mesh_from_outline(outline_pts, z0, z1):
+    """Vertical wall strip following the outline, from z0 to z1.
+
+    Two rings of vertices (bottom + top); quads between consecutive
+    outline points. Returns (points, face_counts, face_indices)."""
+    n = len(outline_pts)
+    points = [(x, y, z0) for x, y in outline_pts] + \
+             [(x, y, z1) for x, y in outline_pts]
+    counts, indices = [], []
+    for i in range(n):
+        j = (i + 1) % n
+        counts.append(4)
+        indices.extend([i, j, n + j, n + i])
+    return points, counts, indices
+
+
+def emit_mesh(name: str, points, face_counts, face_indices, color,
+              doubleSided=True, material=None):
+    """Emit USDA def for a Mesh prim with displayColor (+ optional material)."""
     p_str = ", ".join(f"({x:.4f}, {y:.4f}, {z:.4f})" for x, y, z in points)
     fc_str = ", ".join(str(c) for c in face_counts)
     fi_str = ", ".join(str(i) for i in face_indices)
@@ -109,6 +182,7 @@ def emit_mesh(name: str, points, face_counts, face_indices, color, doubleSided=T
     return [
         f'def Mesh "{name}"',
         "{",
+    ] + _binding(material) + [
         f"    point3f[] points = [{p_str}]",
         f"    int[] faceVertexCounts = [{fc_str}]",
         f"    int[] faceVertexIndices = [{fi_str}]",
@@ -119,10 +193,8 @@ def emit_mesh(name: str, points, face_counts, face_indices, color, doubleSided=T
     ]
 
 
-def emit_goal_net(name: str, x, y, mouth_direction):
-    """A simple open-front goal: 3 vertical posts + crossbar + back, no mesh
-    geometry -- use the basic prims (Capsule for posts, Cube for back) and
-    cast the resulting box-shaped frame."""
+def emit_goal_net(name: str, x, y, mouth_direction, net_mat=None, post_mat=None):
+    """A simple open-front goal: 3 vertical posts + crossbar + back."""
     # Mouth at x; goal sits BEHIND the goal line by GOAL_D.
     behind = x + mouth_direction * GOAL_D
     half = GOAL_W / 2
@@ -132,6 +204,7 @@ def emit_goal_net(name: str, x, y, mouth_direction):
         "{",
         "    def Cube \"Back\"",
         "    {",
+    ] + ["    " + b for b in _binding(net_mat)] + [
         f"        double size = 1",
         f"        matrix4d xformOp:transform = ( ({GOAL_D * 0.06:.4f}, 0, 0, 0),"
         f" (0, {GOAL_W:.4f}, 0, 0), (0, 0, {GOAL_H:.4f}, 0),"
@@ -146,6 +219,7 @@ def emit_goal_net(name: str, x, y, mouth_direction):
         L += [
             f"    def Cylinder \"Post{i+1}\"",
             "    {",
+        ] + ["    " + b for b in _binding(post_mat)] + [
             f"        double radius = {post_r}",
             f"        double height = {GOAL_H}",
             "        uniform token axis = \"Z\"",
@@ -157,6 +231,7 @@ def emit_goal_net(name: str, x, y, mouth_direction):
     L += [
         "    def Cylinder \"Crossbar\"",
         "    {",
+    ] + ["    " + b for b in _binding(post_mat)] + [
         f"        double radius = {post_r}",
         f"        double height = {GOAL_W}",
         "        uniform token axis = \"Y\"",
@@ -170,7 +245,8 @@ def emit_goal_net(name: str, x, y, mouth_direction):
     return L
 
 
-def emit_circle_outline(name: str, cx, cy, radius, color, z, n_seg=64, width=0.05):
+def emit_circle_outline(name: str, cx, cy, radius, color, z, n_seg=64,
+                        width=0.05, material=None):
     """A flat circle drawn as a closed linear BasisCurves loop."""
     pts = []
     for i in range(n_seg):
@@ -180,6 +256,7 @@ def emit_circle_outline(name: str, cx, cy, radius, color, z, n_seg=64, width=0.0
     return [
         f'def BasisCurves "{name}"',
         "{",
+    ] + _binding(material) + [
         '    uniform token type = "linear"',
         '    uniform token wrap = "periodic"',
         f"    int[] curveVertexCounts = [{n_seg}]",
@@ -192,15 +269,10 @@ def emit_circle_outline(name: str, cx, cy, radius, color, z, n_seg=64, width=0.0
     ]
 
 
-def emit_crease_mesh(name: str, x, mouth_dir, radius, color, z, n_arc=24):
-    """Filled semicircular goal crease in front of the goal line at x,
-    facing inward (mouth_dir = +1 right-side goal, -1 left-side goal).
-    Triangle-fan from goal-line centre to arc points."""
-    # arc spans 180 degrees in the mouth direction; for left goal (mouth_dir=-1)
-    # the arc opens toward -x (into the offensive zone of the left side).
+def emit_crease_mesh(name: str, x, mouth_dir, radius, color, z, n_arc=24,
+                     material=None):
+    """Filled semicircular goal crease in front of the goal line at x."""
     pts = [(x, 0.0, z)]  # centre on the goal line
-    # If mouth_dir = +1 (right goal): arc opens to the LEFT (negative x).
-    # If mouth_dir = -1 (left goal):  arc opens to the RIGHT (positive x).
     sign = -mouth_dir
     for i in range(n_arc + 1):
         a = -math.pi / 2 + math.pi * i / n_arc   # -pi/2 .. +pi/2
@@ -211,14 +283,15 @@ def emit_crease_mesh(name: str, x, mouth_dir, radius, color, z, n_arc=24):
     indices = []
     for i in range(n_arc):
         indices.extend([0, 1 + i, 2 + i])
-    return emit_mesh(name, pts, counts, indices, color)
+    return emit_mesh(name, pts, counts, indices, color, material=material)
 
 
-def emit_dot(name: str, x, y, color):
+def emit_dot(name: str, x, y, color, material=None):
     """A small disk via Cylinder of height ~0."""
     return [
         f'def Cylinder "{name}"',
         "{",
+    ] + _binding(material) + [
         f"    double radius = {FACEOFF_DOT_R}",
         "    double height = 0.005",
         "    uniform token axis = \"Z\"",
@@ -254,40 +327,72 @@ def main() -> None:
     ]
 
     # Translate the rink so origin (0,0) is the bottom-left corner of the
-    # rectangular envelope, matching the positions JSON convention
-    # (ice_x in [0, RINK_L], ice_y in [0, RINK_W]). The outline + corners
-    # are built centered, so a translate of (RINK_L/2, RINK_W/2, 0) here.
+    # rectangular envelope, matching the positions JSON convention.
     L.append(f'    double3 xformOp:translate = ({RINK_L/2:.4f}, {RINK_W/2:.4f}, 0)')
     L.append('    uniform token[] xformOpOrder = ["xformOp:translate"]')
     L.append("")
 
+    # --- Materials (UsdPreviewSurface; glossy ice is the headline) -------
+    mats = [
+        # Glossy reflective broadcast ice: near-white, very low roughness,
+        # clearcoat for the wet sheen + bright specular streaks.
+        emit_preview_material("IceMat", (0.93, 0.96, 1.0), roughness=0.05,
+                              metallic=0.0, clearcoat=1.0,
+                              clearcoat_roughness=0.03),
+        emit_preview_material("RedPaint", RED, roughness=0.35),
+        emit_preview_material("BluePaint", BLUE, roughness=0.35),
+        emit_preview_material("CreaseMat", CREASE_COLOR, roughness=0.18,
+                              clearcoat=0.6, clearcoat_roughness=0.08),
+        emit_preview_material("BoardMat", BOARD_COLOR, roughness=0.45),
+        emit_preview_material("KickplateMat", KICKPLATE_COLOR, roughness=0.5),
+        emit_preview_material("NetMat", NET_COLOR, roughness=0.7),
+        emit_preview_material("NetPostMat", NET_POST, roughness=0.3,
+                              metallic=0.1),
+    ]
+    L.append('    def Scope "Looks"')
+    L.append("    {")
+    for mat in mats:
+        for line in mat:
+            L.append("        " + line if line else "")
+    L.append("    }")
+    L.append("")
+
+    M = LOOKS_ROOT
+
     # --- Ice surface (rounded-rect mesh) ---
     outline = rounded_rect_outline(RINK_L, RINK_W, CORNER_R)
     pts, fc, fi = fan_mesh_from_outline(outline, ICE_Z)
-    for line in emit_mesh("Ice", pts, fc, fi, ICE_COLOR):
+    for line in emit_mesh("Ice", pts, fc, fi, ICE_COLOR, material=f"{M}/IceMat"):
+        L.append("    " + line if line else "")
+
+    # --- Perimeter boards (white) + yellow kickplate at the base ---
+    pts, fc, fi = wall_mesh_from_outline(outline, KICKPLATE_H, BOARD_H)
+    for line in emit_mesh("Boards", pts, fc, fi, BOARD_COLOR,
+                          material=f"{M}/BoardMat"):
+        L.append("    " + line if line else "")
+    pts, fc, fi = wall_mesh_from_outline(outline, ICE_Z, KICKPLATE_H)
+    for line in emit_mesh("Kickplate", pts, fc, fi, KICKPLATE_COLOR,
+                          material=f"{M}/KickplateMat"):
         L.append("    " + line if line else "")
 
     # --- Center red line + center red dot ---
     pts, fc, fi = rect_mesh(0, 0, LINE_W, RINK_W, PAINT_Z)
-    for line in emit_mesh("CenterLine", pts, fc, fi, RED):
+    for line in emit_mesh("CenterLine", pts, fc, fi, RED, material=f"{M}/RedPaint"):
         L.append("    " + line if line else "")
 
-    for line in emit_dot("CenterDot", 0, 0, RED):
+    for line in emit_dot("CenterDot", 0, 0, RED, material=f"{M}/RedPaint"):
         L.append("    " + line if line else "")
 
     # --- Blue lines (offsets from rink center: -25 ft, +25 ft) ---
     for nm, off in (("BlueLineL", -(CENTER_X - BLUE_LINE_L)),
                      ("BlueLineR", (BLUE_LINE_R - CENTER_X))):
         pts, fc, fi = rect_mesh(off, 0, LINE_W, RINK_W, PAINT_Z)
-        for line in emit_mesh(nm, pts, fc, fi, BLUE):
+        for line in emit_mesh(nm, pts, fc, fi, BLUE, material=f"{M}/BluePaint"):
             L.append("    " + line if line else "")
 
     # --- Goal lines ---
     for nm, off in (("GoalLineL", -(CENTER_X - GOAL_LINE_X_L)),
                      ("GoalLineR", (GOAL_LINE_X_R - CENTER_X))):
-        # goal lines span the chord at that x, not the full rink width
-        # (the rink narrows inside the corner arcs). Use the rounded-rect
-        # half-width at x.
         cx_in_rect = abs(off)  # distance from rink center along x
         dx_from_corner = (RINK_L / 2 - cx_in_rect)
         if dx_from_corner < CORNER_R:
@@ -296,7 +401,7 @@ def main() -> None:
         else:
             chord_half = RINK_W / 2
         pts, fc, fi = rect_mesh(off, 0, LINE_W, 2 * chord_half, PAINT_Z)
-        for line in emit_mesh(nm, pts, fc, fi, RED):
+        for line in emit_mesh(nm, pts, fc, fi, RED, material=f"{M}/RedPaint"):
             L.append("    " + line if line else "")
 
     # --- Faceoff dots (4 end-zone, 4 neutral-zone). Coords centered. ---
@@ -305,14 +410,16 @@ def main() -> None:
               (GOAL_LINE_X_R - 20 * FT) - CENTER_X):    # right end-zone
         for y in (-22 * FT, 22 * FT):
             dot_i += 1
-            for line in emit_dot(f"EndZoneDot_{dot_i}", x, y, RED):
+            for line in emit_dot(f"EndZoneDot_{dot_i}", x, y, RED,
+                                 material=f"{M}/RedPaint"):
                 L.append("    " + line if line else "")
     dot_i = 0
     for x in (-(CENTER_X - (BLUE_LINE_L + 5 * FT)),     # left neutral, 5 ft from blue line
               (BLUE_LINE_R - CENTER_X) + 5 * FT):        # right neutral
         for y in (-22 * FT, 22 * FT):
             dot_i += 1
-            for line in emit_dot(f"NeutralDot_{dot_i}", x, y, RED):
+            for line in emit_dot(f"NeutralDot_{dot_i}", x, y, RED,
+                                 material=f"{M}/RedPaint"):
                 L.append("    " + line if line else "")
 
     # --- Faceoff circles (15 ft radius around the 4 end-zone dots) ---
@@ -323,30 +430,34 @@ def main() -> None:
             circle_i += 1
             for line in emit_circle_outline(
                     f"FaceoffCircle_{circle_i}", x, y,
-                    FACEOFF_CIRCLE_R, RED, PAINT_Z + 0.002, n_seg=64):
+                    FACEOFF_CIRCLE_R, RED, PAINT_Z + 0.002, n_seg=64,
+                    material=f"{M}/RedPaint"):
                 L.append("    " + line if line else "")
 
     # --- Center-ice circle (15 ft radius, blue) ---
     for line in emit_circle_outline("CenterCircle", 0, 0,
-                                     FACEOFF_CIRCLE_R, BLUE, PAINT_Z + 0.002):
+                                     FACEOFF_CIRCLE_R, BLUE, PAINT_Z + 0.002,
+                                     material=f"{M}/BluePaint"):
         L.append("    " + line if line else "")
 
     # --- Goal creases (blue semicircle in front of each goal line) ---
-    # Left goal mouth opens to +x (into the offensive zone of the left side);
-    # right goal mouth opens to -x. emit_crease_mesh's mouth_dir flips the arc.
     for line in emit_crease_mesh("CreaseL",
                                   -(CENTER_X - GOAL_LINE_X_L), -1,
-                                  CREASE_R, (0.55, 0.78, 0.95), PAINT_Z2):
+                                  CREASE_R, CREASE_COLOR, PAINT_Z2,
+                                  material=f"{M}/CreaseMat"):
         L.append("    " + line if line else "")
     for line in emit_crease_mesh("CreaseR",
                                   (GOAL_LINE_X_R - CENTER_X), 1,
-                                  CREASE_R, (0.55, 0.78, 0.95), PAINT_Z2):
+                                  CREASE_R, CREASE_COLOR, PAINT_Z2,
+                                  material=f"{M}/CreaseMat"):
         L.append("    " + line if line else "")
 
     # --- Goal nets behind each goal line ---
-    for line in emit_goal_net("NetL", -(CENTER_X - GOAL_LINE_X_L), 0, -1):
+    for line in emit_goal_net("NetL", -(CENTER_X - GOAL_LINE_X_L), 0, -1,
+                              net_mat=f"{M}/NetMat", post_mat=f"{M}/NetPostMat"):
         L.append("    " + line if line else "")
-    for line in emit_goal_net("NetR", (GOAL_LINE_X_R - CENTER_X), 0, 1):
+    for line in emit_goal_net("NetR", (GOAL_LINE_X_R - CENTER_X), 0, 1,
+                              net_mat=f"{M}/NetMat", post_mat=f"{M}/NetPostMat"):
         L.append("    " + line if line else "")
 
     L.append("}")
@@ -354,7 +465,7 @@ def main() -> None:
     out_path.write_text("\n".join(L))
     print(f"wrote {out_path}")
     print(f"  ice {RINK_L:.2f} x {RINK_W:.2f} m, corner radius {CORNER_R:.2f} m")
-    print(f"  rink translated to origin at (0,0); ice surface in z=0 plane")
+    print(f"  glossy IceMat + boards + kickplate; PBR materials bound")
 
 
 if __name__ == "__main__":

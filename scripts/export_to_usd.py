@@ -69,6 +69,64 @@ BLADE_COLOR = (0.20, 0.20, 0.22)
 # World/Rink. Built by scripts/build_rink_usd.py.
 RINK_ASSET_RELPATH = "../assets/usd/rink_nhl.usda"
 
+# Materials live under World/Looks. Geometry carries BOTH a flat
+# displayColor (renders anywhere) AND a bound UsdPreviewSurface material
+# (gives RTX / path-traced renderers proper PBR shading -- glossy ice,
+# fabric jerseys, rubber puck). UsdPreviewSurface is the portable PBR
+# shader (RTX, Blender, usdview, Houdini, Unreal), so no Omniverse-only
+# MDL lock-in.
+LOOKS_ROOT = "/World/Looks"
+MAT_SKIN = f"{LOOKS_ROOT}/Skin"
+MAT_STICK = f"{LOOKS_ROOT}/Stick"
+MAT_BLADE = f"{LOOKS_ROOT}/Blade"
+MAT_PUCK = f"{LOOKS_ROOT}/PuckMat"
+
+
+def _team_mat_name(team_key: str, team_colors: dict) -> str:
+    """Material name for a team key, falling back to 'unknown'."""
+    key = team_key if team_key in team_colors else "unknown"
+    return f"Jersey_{key}"
+
+
+def _team_mat_path(team_key: str, team_colors: dict) -> str:
+    return f"{LOOKS_ROOT}/{_team_mat_name(team_key, team_colors)}"
+
+
+def _binding(material) -> list:
+    return [f"            rel material:binding = <{material}>"] if material else []
+
+
+def emit_preview_material(name: str, diffuse, roughness=0.5, metallic=0.0,
+                          clearcoat=0.0, clearcoat_roughness=0.01,
+                          opacity=1.0) -> list:
+    """A UsdPreviewSurface Material under LOOKS_ROOT. Returns USDA lines."""
+    r, g, b = diffuse
+    L = [
+        f'def Material "{name}"',
+        "{",
+        f"    token outputs:surface.connect = "
+        f"<{LOOKS_ROOT}/{name}/Shader.outputs:surface>",
+        '    def Shader "Shader"',
+        "    {",
+        '        uniform token info:id = "UsdPreviewSurface"',
+        f"        color3f inputs:diffuseColor = ({r:.3f}, {g:.3f}, {b:.3f})",
+        f"        float inputs:roughness = {roughness}",
+        f"        float inputs:metallic = {metallic}",
+        "        int inputs:useSpecularWorkflow = 0",
+    ]
+    if clearcoat:
+        L.append(f"        float inputs:clearcoat = {clearcoat}")
+        L.append(f"        float inputs:clearcoatRoughness = {clearcoat_roughness}")
+    if opacity < 1.0:
+        L.append(f"        float inputs:opacity = {opacity}")
+    L += [
+        "        token outputs:surface",
+        "    }",
+        "}",
+        "",
+    ]
+    return L
+
 
 def _runs(present_frames: list) -> list:
     """Group a sorted list of integer frame indices into maximal runs of
@@ -105,12 +163,12 @@ def _capsule_lines(radius: float, height: float, color) -> list:
 
 def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
                     radius: float = PLAYER_RADIUS_M,
-                    is_goalie: bool = False) -> list:
+                    is_goalie: bool = False, team_mat: str = None) -> list:
     """Stylised player: body capsule (team) + skin head + stick (skater)
     or wider pads (goalie). All sub-prims in the player's LOCAL space, so
     the parent xform's translate just slides the whole figure on the ice.
-    The skater faces local +X (no per-frame yaw yet -- that's the next step
-    once we add velocity-based facing)."""
+    The skater faces local +X; per-frame yaw on the parent xform turns it.
+    Each sub-prim carries a displayColor AND a bound PBR material."""
     body_h = height * 0.78           # ~1.4 m torso+legs
     head_r = 0.17 if not is_goalie else 0.15
     head_z = body_h + head_r * 0.6
@@ -119,6 +177,7 @@ def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
     L += [
         '        def Capsule "Body"',
         "        {",
+    ] + _binding(team_mat) + [
         f"            double radius = {radius}",
         f"            double height = {max(0.01, body_h - 2 * radius)}",
         '            uniform token axis = "Z"',
@@ -132,6 +191,7 @@ def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
     L += [
         '        def Sphere "Head"',
         "        {",
+    ] + _binding(MAT_SKIN) + [
         f"            double radius = {head_r}",
         f"            double3 xformOp:translate = (0, 0, {head_z})",
         '            uniform token[] xformOpOrder = ["xformOp:translate"]',
@@ -147,6 +207,7 @@ def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
         L += [
             '        def Cylinder "StickShaft"',
             "        {",
+        ] + _binding(MAT_STICK) + [
             "            double radius = 0.025",
             f"            double height = {shaft_len}",
             '            uniform token axis = "X"',
@@ -157,6 +218,7 @@ def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
             "        }",
             '        def Cube "StickBlade"',
             "        {",
+        ] + _binding(MAT_BLADE) + [
             "            double size = 1",
             # 0.45 m long blade, ~0.02 thick, 0.06 wide at z~0.04 above ice
             f"            matrix4d xformOp:transform = "
@@ -172,6 +234,7 @@ def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
         L += [
             '        def Cube "Pads"',
             "        {",
+        ] + _binding(team_mat) + [
             "            double size = 1",
             # 0.95 m wide, 0.18 m deep, 0.95 m tall, slightly forward
             f"            matrix4d xformOp:transform = "
@@ -354,6 +417,7 @@ def _puck_disc_lines() -> list:
     return [
         '        def Cylinder "Disc"',
         "        {",
+    ] + _binding(MAT_PUCK) + [
         f"            double radius = {PUCK_R_M}",
         f"            double height = {PUCK_H_M}",
         '            uniform token axis = "Z"',
@@ -507,6 +571,27 @@ def main() -> None:
     L.append('def Xform "World" (kind = "assembly")')
     L.append("{")
 
+    # --- Materials (UsdPreviewSurface; jerseys, skin, stick, puck) -------
+    L.append('    def Scope "Looks"')
+    L.append("    {")
+    looks, seen = [], set()
+    for key in team_colors:                       # one jersey mat per team
+        nm = _team_mat_name(key, team_colors)
+        if nm in seen:
+            continue
+        seen.add(nm)
+        looks.append(emit_preview_material(nm, team_colors[key], roughness=0.55))
+    looks.append(emit_preview_material("Skin", SKIN_COLOR, roughness=0.65))
+    looks.append(emit_preview_material("Stick", STICK_COLOR, roughness=0.40))
+    looks.append(emit_preview_material("Blade", BLADE_COLOR, roughness=0.30,
+                                       metallic=0.1))
+    looks.append(emit_preview_material("PuckMat", PUCK_COLOR, roughness=0.45))
+    for mat in looks:
+        for line in mat:
+            L.append("        " + line if line else "")
+    L.append("    }")
+    L.append("")
+
     # Rink — reference the standalone rink asset built by build_rink_usd.py.
     # The asset's defaultPrim ("Rink") provides the ice mesh, lines, dots,
     # nets etc.; swap this reference for a photoreal rink USD when you have
@@ -529,8 +614,9 @@ def main() -> None:
     for tid in sorted(players):
         meta = players[tid].pop("_meta")
         color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
+        team_mat = _team_mat_path(meta.get("team", "unknown"), team_colors)
         avatar = _humanoid_lines(color, PLAYER_HEIGHT_M, PLAYER_RADIUS_M,
-                                  is_goalie=False)
+                                  is_goalie=False, team_mat=team_mat)
         if tid in top_pov_ids:
             avatar = avatar + _pov_camera_lines("POV")
         # Per-frame yaw from velocity drives the stick + POV camera facing.
@@ -549,8 +635,10 @@ def main() -> None:
         for tid in sorted(goalies):
             meta = goalies[tid].pop("_meta")
             color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
+            team_mat = _team_mat_path(meta.get("team", "unknown"), team_colors)
             avatar = _humanoid_lines(color, PLAYER_HEIGHT_M * 0.95,
-                                      GOALIE_RADIUS_M, is_goalie=True)
+                                      GOALIE_RADIUS_M, is_goalie=True,
+                                      team_mat=team_mat)
             for line in _emit_xform(f"g{tid}", goalies[tid], n_frames,
                                     z_m=0.0, custom=meta, child_lines=avatar):
                 L.append("    " + line)
@@ -563,12 +651,43 @@ def main() -> None:
                             child_lines=_puck_disc_lines()):
         L.append(line)
 
-    # Sun-style overhead light so renderers without a default light have one.
-    L.append('    def DistantLight "Sun"')
+    rink_l_m = RINK_LENGTH_FT * FT_TO_M
+    rink_w_m = RINK_WIDTH_FT * FT_TO_M
+
+    # --- Environment + arena lighting ------------------------------------
+    # The glossy ice (build_rink_usd IceMat) reflects whatever the dome +
+    # overhead banks emit, so this is what produces the "broadcast" look.
+    # Intensities are starting points tuned by eye in the RTX viewport.
+    #
+    # Dome: soft cool ambient + sky tone reflected in the ice.
+    L.append('    def DomeLight "Sky"')
     L.append("    {")
-    L.append("        float inputs:intensity = 2500")
-    L.append("        float inputs:angle = 1.5")
-    L.append('        double3 xformOp:rotateXYZ = (-55, 0, 35)')
+    L.append("        float inputs:intensity = 120")
+    L.append("        color3f inputs:color = (0.60, 0.72, 0.95)")
+    L.append("    }")
+    L.append("")
+    # Overhead arena light banks -> the bright specular streaks on the ice.
+    # RectLight lies in XY and emits along -Z, so placed high it points down.
+    for i, yo in enumerate((-7.0, 7.0)):
+        L.append(f'    def RectLight "ArenaLight{i+1}"')
+        L.append("    {")
+        L.append("        float inputs:intensity = 2500")
+        L.append("        color3f inputs:color = (1.00, 0.96, 0.88)")
+        L.append("        float inputs:width = 38")
+        L.append("        float inputs:height = 7")
+        L.append("        bool inputs:normalize = 1")
+        L.append(f"        double3 xformOp:translate = "
+                 f"({rink_l_m/2:.3f}, {rink_w_m/2 + yo:.3f}, 17.0)")
+        L.append('        uniform token[] xformOpOrder = ["xformOp:translate"]')
+        L.append("    }")
+        L.append("")
+    # Soft directional key for shadow definition + modelling on the players.
+    L.append('    def DistantLight "Key"')
+    L.append("    {")
+    L.append("        float inputs:intensity = 400")
+    L.append("        float inputs:angle = 2.5")
+    L.append("        color3f inputs:color = (1.00, 0.98, 0.95)")
+    L.append('        double3 xformOp:rotateXYZ = (-50, 0, 35)')
     L.append('        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]')
     L.append("    }")
     L.append("")
@@ -576,8 +695,6 @@ def main() -> None:
     # Default top-down framing camera. Placed above rink centre, looking
     # straight down. A user in Omniverse can switch to a free-fly or VR
     # camera; this one is just a sensible default.
-    rink_l_m = RINK_LENGTH_FT * FT_TO_M
-    rink_w_m = RINK_WIDTH_FT * FT_TO_M
     L.append('    def Camera "TopDown"')
     L.append("    {")
     L.append("        float focalLength = 35")
