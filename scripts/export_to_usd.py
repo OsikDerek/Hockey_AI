@@ -64,6 +64,7 @@ PUCK_COLOR = (0.05, 0.05, 0.05)
 SKIN_COLOR = (0.94, 0.79, 0.69)
 STICK_COLOR = (0.42, 0.26, 0.13)
 BLADE_COLOR = (0.20, 0.20, 0.22)
+GEAR_COLOR = (0.10, 0.10, 0.12)   # dark pants / gloves / skates
 
 # Path (relative to the output USD) of the rink asset to reference under
 # World/Rink. Built by scripts/build_rink_usd.py.
@@ -80,6 +81,7 @@ MAT_SKIN = f"{LOOKS_ROOT}/Skin"
 MAT_STICK = f"{LOOKS_ROOT}/Stick"
 MAT_BLADE = f"{LOOKS_ROOT}/Blade"
 MAT_PUCK = f"{LOOKS_ROOT}/PuckMat"
+MAT_GEAR = f"{LOOKS_ROOT}/Gear"
 
 
 def _team_mat_name(team_key: str, team_colors: dict) -> str:
@@ -161,91 +163,164 @@ def _capsule_lines(radius: float, height: float, color) -> list:
     ]
 
 
+def _rot_z_to(ux, uy, uz):
+    """3x3 rotation (column convention v'=R v) mapping +Z onto unit (ux,uy,uz)."""
+    c = uz                                   # dot((0,0,1),u)
+    vx, vy, vz = -uy, ux, 0.0                # cross((0,0,1), u)
+    if c > 0.999999:
+        return [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    if c < -0.999999:
+        return [[1, 0, 0], [0, -1, 0], [0, 0, -1]]   # 180 deg about X
+    k = 1.0 / (1.0 + c)
+    vxx = [[0, -vz, vy], [vz, 0, -vx], [-vy, vx, 0]]
+    vxx2 = [[sum(vxx[i][m] * vxx[m][j] for m in range(3)) for j in range(3)]
+            for i in range(3)]
+    return [[(1 if i == j else 0) + vxx[i][j] + vxx2[i][j] * k
+             for j in range(3)] for i in range(3)]
+
+
+def _limb(name, p0, p1, radius, color, material=None):
+    """A capsule-like cylinder from p0 to p1 (3D), bound to `material`."""
+    dx, dy, dz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+    ln = max(1e-6, math.sqrt(dx * dx + dy * dy + dz * dz))
+    R = _rot_z_to(dx / ln, dy / ln, dz / ln)
+    mx, my, mz = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2
+    # USD matrix4d is row-major, point*M; the 3x3 block is R-transpose.
+    m = (f"(({R[0][0]:.5f}, {R[0][1]:.5f}, {R[0][2]:.5f}, 0),"
+         f" ({R[1][0]:.5f}, {R[1][1]:.5f}, {R[1][2]:.5f}, 0),"
+         f" ({R[2][0]:.5f}, {R[2][1]:.5f}, {R[2][2]:.5f}, 0),"
+         f" ({mx:.4f}, {my:.4f}, {mz:.4f}, 1))")
+    return [
+        f'        def Cylinder "{name}"',
+        "        {",
+    ] + _binding(material) + [
+        f"            double radius = {radius:.4f}",
+        f"            double height = {ln:.4f}",
+        '            uniform token axis = "Z"',
+        f"            matrix4d xformOp:transform = {m}",
+        '            uniform token[] xformOpOrder = ["xformOp:transform"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "        }",
+    ]
+
+
+def _box(name, center, size, color, material=None):
+    """An axis-aligned box of `size` (sx,sy,sz) centered at `center`."""
+    cx, cy, cz = center
+    sx, sy, sz = size
+    return [
+        f'        def Cube "{name}"',
+        "        {",
+    ] + _binding(material) + [
+        "            double size = 1",
+        f"            matrix4d xformOp:transform = "
+        f"(({sx:.4f}, 0, 0, 0), (0, {sy:.4f}, 0, 0), (0, 0, {sz:.4f}, 0),"
+        f" ({cx:.4f}, {cy:.4f}, {cz:.4f}, 1))",
+        '            uniform token[] xformOpOrder = ["xformOp:transform"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "        }",
+    ]
+
+
+def _sphere(name, center, radius, color, material=None):
+    cx, cy, cz = center
+    return [
+        f'        def Sphere "{name}"',
+        "        {",
+    ] + _binding(material) + [
+        f"            double radius = {radius:.4f}",
+        f"            double3 xformOp:translate = ({cx:.4f}, {cy:.4f}, {cz:.4f})",
+        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "        }",
+    ]
+
+
+def _capsule(name, center, radius, height, axis, color, material=None):
+    cx, cy, cz = center
+    return [
+        f'        def Capsule "{name}"',
+        "        {",
+    ] + _binding(material) + [
+        f"            double radius = {radius:.4f}",
+        f"            double height = {max(0.01, height):.4f}",
+        f'            uniform token axis = "{axis}"',
+        f"            double3 xformOp:translate = ({cx:.4f}, {cy:.4f}, {cz:.4f})",
+        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
+        f"            color3f[] primvars:displayColor = "
+        f"[({color[0]:.3f}, {color[1]:.3f}, {color[2]:.3f})]",
+        "        }",
+    ]
+
+
 def _humanoid_lines(team_color, height: float = PLAYER_HEIGHT_M,
                     radius: float = PLAYER_RADIUS_M,
                     is_goalie: bool = False, team_mat: str = None) -> list:
-    """Stylised player: body capsule (team) + skin head + stick (skater)
-    or wider pads (goalie). All sub-prims in the player's LOCAL space, so
-    the parent xform's translate just slides the whole figure on the ice.
-    The skater faces local +X; per-frame yaw on the parent xform turns it.
-    Each sub-prim carries a displayColor AND a bound PBR material."""
-    body_h = height * 0.78           # ~1.4 m torso+legs
-    head_r = 0.17 if not is_goalie else 0.15
-    head_z = body_h + head_r * 0.6
-    L = []
-    # Body
-    L += [
-        '        def Capsule "Body"',
-        "        {",
-    ] + _binding(team_mat) + [
-        f"            double radius = {radius}",
-        f"            double height = {max(0.01, body_h - 2 * radius)}",
-        '            uniform token axis = "Z"',
-        f"            double3 xformOp:translate = (0, 0, {body_h / 2})",
-        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
-        f"            color3f[] primvars:displayColor = "
-        f"[({team_color[0]:.3f}, {team_color[1]:.3f}, {team_color[2]:.3f})]",
-        "        }",
-    ]
-    # Head
-    L += [
-        '        def Sphere "Head"',
-        "        {",
-    ] + _binding(MAT_SKIN) + [
-        f"            double radius = {head_r}",
-        f"            double3 xformOp:translate = (0, 0, {head_z})",
-        '            uniform token[] xformOpOrder = ["xformOp:translate"]',
-        f"            color3f[] primvars:displayColor = "
-        f"[({SKIN_COLOR[0]:.3f}, {SKIN_COLOR[1]:.3f}, {SKIN_COLOR[2]:.3f})]",
-        "        }",
-    ]
+    """An articulated hockey player in LOCAL space, facing +X, on ice z=0.
+
+    Skater: pelvis + two angled legs + skates, team-jersey torso/shoulders/
+    sleeves, two arms gripping a stick, dark gloves, skin head + team helmet.
+    Goalie: bulky chest, big leg pads, blocker/catcher, mask, paddle stick.
+    Per-frame yaw on the parent xform turns the whole figure to face its
+    velocity. Every sub-prim carries a displayColor AND a bound PBR material.
+    """
+    tm = team_mat
+    P = []
     if not is_goalie:
-        # Stick: shaft (long thin cylinder forward + slightly to the side)
-        # + blade (small flat box at the end). Local +X is "forward".
-        shaft_len = 1.5
-        shaft_x = shaft_len / 2 + 0.20  # offset out from the body
-        L += [
-            '        def Cylinder "StickShaft"',
-            "        {",
-        ] + _binding(MAT_STICK) + [
-            "            double radius = 0.025",
-            f"            double height = {shaft_len}",
-            '            uniform token axis = "X"',
-            f"            double3 xformOp:translate = ({shaft_x:.3f}, 0.20, 0.55)",
-            '            uniform token[] xformOpOrder = ["xformOp:translate"]',
-            f"            color3f[] primvars:displayColor = "
-            f"[({STICK_COLOR[0]:.3f}, {STICK_COLOR[1]:.3f}, {STICK_COLOR[2]:.3f})]",
-            "        }",
-            '        def Cube "StickBlade"',
-            "        {",
-        ] + _binding(MAT_BLADE) + [
-            "            double size = 1",
-            # 0.45 m long blade, ~0.02 thick, 0.06 wide at z~0.04 above ice
-            f"            matrix4d xformOp:transform = "
-            f"((0.45, 0, 0, 0), (0, 0.06, 0, 0), (0, 0, 0.025, 0),"
-            f" ({shaft_x + shaft_len / 2 + 0.18:.3f}, 0.25, 0.04, 1))",
-            '            uniform token[] xformOpOrder = ["xformOp:transform"]',
-            f"            color3f[] primvars:displayColor = "
-            f"[({BLADE_COLOR[0]:.3f}, {BLADE_COLOR[1]:.3f}, {BLADE_COLOR[2]:.3f})]",
-            "        }",
-        ]
+        # Lower body (dark pants / skates).
+        P += _box("Pelvis", (0, 0, 0.90), (0.24, 0.34, 0.22), GEAR_COLOR, MAT_GEAR)
+        P += _limb("LegL", (0, 0.12, 0.92), (0.18, 0.14, 0.10), 0.085,
+                   GEAR_COLOR, MAT_GEAR)
+        P += _limb("LegR", (0, -0.12, 0.92), (-0.10, -0.14, 0.10), 0.085,
+                   GEAR_COLOR, MAT_GEAR)
+        P += _box("SkateL", (0.18, 0.14, 0.04), (0.30, 0.08, 0.07),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _box("SkateR", (-0.10, -0.14, 0.04), (0.30, 0.08, 0.07),
+                  GEAR_COLOR, MAT_GEAR)
+        # Jersey torso + shoulders + sleeves (team colour).
+        P += _capsule("Torso", (0, 0, 1.18), 0.20, 0.30, "Z", team_color, tm)
+        P += _capsule("Shoulders", (0, 0, 1.40), 0.12, 0.40, "Y", team_color, tm)
+        P += _limb("ArmL", (0, 0.22, 1.40), (0.34, 0.10, 0.95), 0.065,
+                   team_color, tm)
+        P += _limb("ArmR", (0, -0.22, 1.40), (0.60, 0.16, 0.74), 0.065,
+                   team_color, tm)
+        P += _box("GloveL", (0.34, 0.10, 0.93), (0.13, 0.13, 0.13),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _box("GloveR", (0.60, 0.16, 0.72), (0.13, 0.13, 0.13),
+                  GEAR_COLOR, MAT_GEAR)
+        # Neck, head, helmet.
+        P += _capsule("Neck", (0, 0, 1.50), 0.05, 0.06, "Z", SKIN_COLOR, MAT_SKIN)
+        P += _sphere("Head", (0.03, 0, 1.62), 0.115, SKIN_COLOR, MAT_SKIN)
+        P += _sphere("Helmet", (-0.02, 0, 1.66), 0.130, team_color, tm)
+        # Stick: shaft from top hand down to the ice + blade.
+        P += _limb("StickShaft", (0.34, 0.10, 0.95), (0.95, 0.20, 0.06), 0.022,
+                   STICK_COLOR, MAT_STICK)
+        P += _box("StickBlade", (1.06, 0.21, 0.04), (0.42, 0.07, 0.05),
+                  BLADE_COLOR, MAT_BLADE)
     else:
-        # Goalie: wider pad block in front of the body + blocker/glove cubes.
-        L += [
-            '        def Cube "Pads"',
-            "        {",
-        ] + _binding(team_mat) + [
-            "            double size = 1",
-            # 0.95 m wide, 0.18 m deep, 0.95 m tall, slightly forward
-            f"            matrix4d xformOp:transform = "
-            f"((0.95, 0, 0, 0), (0, 0.18, 0, 0), (0, 0, 0.95, 0),"
-            f" (0.20, 0, 0.47, 1))",
-            '            uniform token[] xformOpOrder = ["xformOp:transform"]',
-            f"            color3f[] primvars:displayColor = "
-            f"[({team_color[0]:.3f}, {team_color[1]:.3f}, {team_color[2]:.3f})]",
-            "        }",
-        ]
-    return L
+        # Goalie: crouched, big pads, blocker/catcher, mask, paddle.
+        P += _box("Pelvis", (0, 0, 0.80), (0.30, 0.46, 0.24), GEAR_COLOR, MAT_GEAR)
+        P += _box("PadL", (0.12, 0.22, 0.52), (0.24, 0.26, 0.92), team_color, tm)
+        P += _box("PadR", (0.12, -0.22, 0.52), (0.24, 0.26, 0.92), team_color, tm)
+        P += _box("SkateL", (0.20, 0.22, 0.05), (0.34, 0.10, 0.08),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _box("SkateR", (0.20, -0.22, 0.05), (0.34, 0.10, 0.08),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _box("Chest", (0.04, 0, 1.16), (0.34, 0.54, 0.48), team_color, tm)
+        P += _box("Blocker", (0.24, -0.36, 1.04), (0.16, 0.10, 0.32),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _box("Catcher", (0.26, 0.36, 0.98), (0.20, 0.20, 0.22),
+                  GEAR_COLOR, MAT_GEAR)
+        P += _sphere("Head", (0.02, 0, 1.55), 0.12, SKIN_COLOR, MAT_SKIN)
+        P += _sphere("Mask", (-0.01, 0, 1.57), 0.135, team_color, tm)
+        P += _limb("StickShaft", (0.22, 0.34, 1.02), (0.55, 0.42, 0.12), 0.03,
+                   STICK_COLOR, MAT_STICK)
+        P += _box("Paddle", (0.60, 0.44, 0.32), (0.10, 0.10, 0.56),
+                  STICK_COLOR, MAT_STICK)
+    return P
 
 
 def _parse_color(s: str):
@@ -586,6 +661,7 @@ def main() -> None:
     looks.append(emit_preview_material("Blade", BLADE_COLOR, roughness=0.30,
                                        metallic=0.1))
     looks.append(emit_preview_material("PuckMat", PUCK_COLOR, roughness=0.45))
+    looks.append(emit_preview_material("Gear", GEAR_COLOR, roughness=0.5))
     for mat in looks:
         for line in mat:
             L.append("        " + line if line else "")
