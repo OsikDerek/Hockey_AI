@@ -164,6 +164,22 @@ def _team_ring_lines(material: str, r_out=0.58, r_in=0.42, z=0.03,
     ]
 
 
+def _ref_gear_lines(team_color, team_mat: str, stick: bool = True,
+                    helmet: bool = False) -> list:
+    """Hockey gear added on top of a referenced character. Siblings of the
+    figure, so the team-recolour over doesn't touch them. The mocap mesh
+    already has a head/cap (recoloured to the team), so helmet defaults off."""
+    L = []
+    if helmet:
+        L += _sphere("Helmet", (0.03, 0, 1.55), 0.13, team_color, team_mat)
+    if stick:
+        L += _limb("StickShaft", (0.30, 0.10, 0.92), (0.98, 0.20, 0.06),
+                   0.022, STICK_COLOR, MAT_STICK)
+        L += _box("StickBlade", (1.08, 0.21, 0.04), (0.42, 0.07, 0.05),
+                  BLADE_COLOR, MAT_BLADE)
+    return L
+
+
 def _runs(present_frames: list) -> list:
     """Group a sorted list of integer frame indices into maximal runs of
     consecutive frames. Returns [(start, end_inclusive), ...]."""
@@ -675,22 +691,35 @@ def main() -> None:
     frames = data["frames"]
     n_frames = len(frames)
 
-    # Gather per-track samples.
+    # Gather per-track samples. Team is resolved by MAJORITY vote across the
+    # track's detections (not first-seen) so a track whose first frame lands
+    # during the team-classifier warmup isn't stuck "unknown" for the clip.
+    from collections import Counter
     players: dict = {}   # track_id -> {frame: (x, y), '_meta': {...}}
     goalies: dict = {}
     puck_samples: dict = {}
+    p_teams: dict = {}   # tid -> Counter of teams
+    g_teams: dict = {}
     for fr in frames:
         fi = fr["frame_idx"]
         for p in fr.get("players", []) or []:
             tid = p["track_id"]
-            d = players.setdefault(tid, {"_meta": {"team": p.get("team") or "unknown"}})
-            d[fi] = (p["ice_x"], p["ice_y"])
+            players.setdefault(tid, {})[fi] = (p["ice_x"], p["ice_y"])
+            if p.get("team"):
+                p_teams.setdefault(tid, Counter())[p["team"]] += 1
         for g in fr.get("goalies", []) or []:
             tid = g["track_id"]
-            d = goalies.setdefault(tid, {"_meta": {"team": g.get("team") or "unknown"}})
-            d[fi] = (g["ice_x"], g["ice_y"])
+            goalies.setdefault(tid, {})[fi] = (g["ice_x"], g["ice_y"])
+            if g.get("team"):
+                g_teams.setdefault(tid, Counter())[g["team"]] += 1
         if fr.get("puck"):
             puck_samples[fi] = (fr["puck"]["ice_x"], fr["puck"]["ice_y"])
+    for tid, d in players.items():
+        c = p_teams.get(tid)
+        d["_meta"] = {"team": c.most_common(1)[0][0] if c else "unknown"}
+    for tid, d in goalies.items():
+        c = g_teams.get(tid)
+        d["_meta"] = {"team": c.most_common(1)[0][0] if c else "unknown"}
 
     # ---- emit USDA ----
     L = []
@@ -773,9 +802,10 @@ def main() -> None:
         team_mat = _team_mat_path(team, team_colors)
         yaws = _compute_yaws(players[tid])
         if player_rel:
-            # Reference the rigged character; recolour it + team base ring.
+            # Reference the rigged character; recolour it + gear + team ring.
             children = _team_ring_lines(
                 f"{LOOKS_ROOT}/{_team_marker_name(team, team_colors)}")
+            children += _ref_gear_lines(color, team_mat, stick=True)
             if tid in top_pov_ids:
                 children = children + _pov_camera_lines("POV")
             lines = _emit_xform(f"p{tid}", players[tid], n_frames, z_m=0.0,
@@ -807,6 +837,7 @@ def main() -> None:
             if player_rel:
                 children = _team_ring_lines(
                     f"{LOOKS_ROOT}/{_team_marker_name(team, team_colors)}")
+                children += _ref_gear_lines(color, team_mat, stick=False)
                 lines = _emit_xform(f"g{tid}", goalies[tid], n_frames, z_m=0.0,
                                     custom=meta, child_lines=children, yaws=gyaws,
                                     reference=player_rel, recolor_mat=team_mat,
