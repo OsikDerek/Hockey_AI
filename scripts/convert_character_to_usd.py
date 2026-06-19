@@ -104,6 +104,13 @@ cy = (mins.y + maxs.y) / 2
 root.location = (-cx, -cy, -mins.z)
 bpy.context.view_layer.update()
 
+# --- strip lights + world so the referenced asset adds none to the scene
+# (otherwise every player instance would carry its own env_light) ---
+for o in list(bpy.data.objects):
+    if o.type == 'LIGHT':
+        bpy.data.objects.remove(o, do_unlink=True)
+bpy.context.scene.world = None
+
 # --- export USD ---
 outp = Path(args.output)
 if not outp.is_absolute():

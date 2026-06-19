@@ -34,3 +34,12 @@ Thumbs.db
 .ipynb_checkpoints/
 models/HockeyAI_model_weight.pt
 models/*.pt
+
+# Downloaded character assets (Mixamo/marketplace) + derived USD --
+# do NOT redistribute third-party meshes in this public repo. The
+# pipeline falls back to built-in procedural avatars when these are absent.
+assets/usd/source/
+assets/usd/player_skater.usda
+assets/usd/player_goalie.usda
+output/_character_preview.png
+output/_avatar_check*.png

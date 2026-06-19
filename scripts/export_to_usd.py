@@ -100,7 +100,7 @@ def _binding(material) -> list:
 
 def emit_preview_material(name: str, diffuse, roughness=0.5, metallic=0.0,
                           clearcoat=0.0, clearcoat_roughness=0.01,
-                          opacity=1.0) -> list:
+                          opacity=1.0, emissive=None) -> list:
     """A UsdPreviewSurface Material under LOOKS_ROOT. Returns USDA lines."""
     r, g, b = diffuse
     L = [
@@ -121,6 +121,9 @@ def emit_preview_material(name: str, diffuse, roughness=0.5, metallic=0.0,
         L.append(f"        float inputs:clearcoatRoughness = {clearcoat_roughness}")
     if opacity < 1.0:
         L.append(f"        float inputs:opacity = {opacity}")
+    if emissive:
+        L.append(f"        color3f inputs:emissiveColor = "
+                 f"({emissive[0]:.3f}, {emissive[1]:.3f}, {emissive[2]:.3f})")
     L += [
         "        token outputs:surface",
         "    }",
@@ -128,6 +131,37 @@ def emit_preview_material(name: str, diffuse, roughness=0.5, metallic=0.0,
         "",
     ]
     return L
+
+
+def _team_marker_name(team_key: str, team_colors: dict) -> str:
+    key = team_key if team_key in team_colors else "unknown"
+    return f"Marker_{key}"
+
+
+def _team_ring_lines(material: str, r_out=0.58, r_in=0.42, z=0.03,
+                     n=44) -> list:
+    """A flat emissive team ring on the ice at the player's feet (team ID)."""
+    outer = [(r_out * math.cos(2 * math.pi * i / n),
+              r_out * math.sin(2 * math.pi * i / n), z) for i in range(n)]
+    inner = [(r_in * math.cos(2 * math.pi * i / n),
+              r_in * math.sin(2 * math.pi * i / n), z) for i in range(n)]
+    pts = outer + inner
+    counts, idx = [], []
+    for i in range(n):
+        j = (i + 1) % n
+        counts.append(4)
+        idx += [i, j, n + j, n + i]
+    p_str = ", ".join(f"({x:.4f}, {y:.4f}, {zz:.4f})" for x, y, zz in pts)
+    return [
+        '        def Mesh "TeamRing"',
+        "        {",
+    ] + _binding(material) + [
+        f"            point3f[] points = [{p_str}]",
+        f"            int[] faceVertexCounts = [{', '.join(str(c) for c in counts)}]",
+        f"            int[] faceVertexIndices = [{', '.join(str(i) for i in idx)}]",
+        "            uniform bool doubleSided = true",
+        "        }",
+    ]
 
 
 def _runs(present_frames: list) -> list:
@@ -504,33 +538,39 @@ def _puck_disc_lines() -> list:
 
 def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
                 z_m: float, custom: dict, child_lines=None,
-                yaws: dict = None) -> list:
+                yaws: dict = None, reference: str = None,
+                recolor_mat: str = None, ref_prim: str = "Skater") -> list:
     """Emit one xform prim with translate timeSamples + visibility toggles.
 
     samples_by_frame: dict[frame_idx] -> (ice_x_ft, ice_y_ft).
+    reference: if set, the track xform references this asset (relpath) at
+        </ref_prim> -- the parent translate/yaw drives the referenced figure.
+    recolor_mat: if set, bind this material onto the referenced figure with
+        strongerThanDescendants strength (recolours the whole character).
     Returns lines of usda text (indented two spaces under the parent prim).
     """
     if not samples_by_frame:
         return []
     present = sorted(samples_by_frame)
     runs = _runs(present)
-    # USD customData (team etc.) lives in the prim's METADATA parentheses,
-    # not in the body braces -- so build the header with that block when
-    # custom data is provided.
+    # customData (team etc.) + references live in the prim METADATA parens.
+    meta = []
     if custom:
-        lines = [f'    def Xform "{name}" (', "        customData = {"]
+        meta.append("        customData = {")
         for k, v in custom.items():
             if isinstance(v, str):
-                lines.append(f'            string {k} = "{v}"')
+                meta.append(f'            string {k} = "{v}"')
             elif isinstance(v, bool):
-                lines.append(f"            bool {k} = {str(v).lower()}")
+                meta.append(f"            bool {k} = {str(v).lower()}")
             elif isinstance(v, int):
-                lines.append(f"            int {k} = {v}")
+                meta.append(f"            int {k} = {v}")
             elif isinstance(v, float):
-                lines.append(f"            double {k} = {v}")
-        lines.append("        }")
-        lines.append("    )")
-        lines.append("    {")
+                meta.append(f"            double {k} = {v}")
+        meta.append("        }")
+    if reference:
+        meta.append(f"        prepend references = @{reference}@</{ref_prim}>")
+    if meta:
+        lines = [f'    def Xform "{name}" ('] + meta + ["    )", "    {"]
     else:
         lines = [f'    def Xform "{name}"', "    {"]
 
@@ -566,7 +606,16 @@ def _emit_xform(name: str, samples_by_frame: dict, total_frames: int,
             if e + 1 < total_frames:
                 lines.append(f'            {e + 1}: "invisible",')
         lines.append("        }")
-    # Embedded child geometry (capsule for players, cylinder for puck).
+    # Recolour a referenced character: bind the team material on the
+    # referenced figure root, stronger than its own internal bindings.
+    if recolor_mat:
+        lines.append(f'        over "{ref_prim}"')
+        lines.append("        {")
+        lines.append(f"            rel material:binding = <{recolor_mat}> (")
+        lines.append('                bindMaterialAs = "strongerThanDescendants"')
+        lines.append("            )")
+        lines.append("        }")
+    # Embedded child geometry (avatar / puck / team ring / POV camera).
     if child_lines:
         lines.extend(child_lines)
     lines.append("    }")
@@ -586,6 +635,14 @@ def main() -> None:
                          'for red. Override the default team_a colour.')
     ap.add_argument("--team-b-color", default=None,
                     help="same, for team_b.")
+    ap.add_argument("--player-asset", default=None,
+                    help="path to a rigged character USD (e.g. "
+                         "assets/usd/player_skater.usda from "
+                         "convert_character_to_usd.py). When given, each track "
+                         "references it (team-recoloured + a team ring) instead "
+                         "of the built-in articulated avatar.")
+    ap.add_argument("--player-asset-prim", default="Skater",
+                    help="root prim name inside the player asset to reference")
     args = ap.parse_args()
 
     team_colors = dict(DEFAULT_TEAM_COLORS)
@@ -600,6 +657,18 @@ def main() -> None:
                 else PROJECT_ROOT / "output" / f"{args.clip}.usda")
     if not pos_path.exists():
         raise SystemExit(f"positions JSON not found: {pos_path}")
+
+    # Optional rigged-character asset -> reference it per track.
+    import os
+    player_rel = None
+    if args.player_asset:
+        pa = Path(args.player_asset)
+        if not pa.is_absolute():
+            pa = PROJECT_ROOT / pa
+        if pa.exists():
+            player_rel = os.path.relpath(pa, out_path.parent).replace("\\", "/")
+        else:
+            print(f"WARN: --player-asset {pa} not found; using built-in avatars")
 
     data = json.loads(pos_path.read_text())
     fps = float(data.get("fps", 30.0))
@@ -662,6 +731,16 @@ def main() -> None:
                                        metallic=0.1))
     looks.append(emit_preview_material("PuckMat", PUCK_COLOR, roughness=0.45))
     looks.append(emit_preview_material("Gear", GEAR_COLOR, roughness=0.5))
+    # Emissive team markers for the base ring under referenced characters.
+    seen_m = set()
+    for key in team_colors:
+        nm = _team_marker_name(key, team_colors)
+        if nm in seen_m:
+            continue
+        seen_m.add(nm)
+        c = team_colors[key]
+        looks.append(emit_preview_material(nm, c, roughness=0.4,
+                                           emissive=tuple(min(1.0, v * 1.3) for v in c)))
     for mat in looks:
         for line in mat:
             L.append("        " + line if line else "")
@@ -689,34 +768,56 @@ def main() -> None:
     L.append("    {")
     for tid in sorted(players):
         meta = players[tid].pop("_meta")
-        color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
-        team_mat = _team_mat_path(meta.get("team", "unknown"), team_colors)
-        avatar = _humanoid_lines(color, PLAYER_HEIGHT_M, PLAYER_RADIUS_M,
-                                  is_goalie=False, team_mat=team_mat)
-        if tid in top_pov_ids:
-            avatar = avatar + _pov_camera_lines("POV")
-        # Per-frame yaw from velocity drives the stick + POV camera facing.
+        team = meta.get("team", "unknown")
+        color = team_colors.get(team, team_colors["unknown"])
+        team_mat = _team_mat_path(team, team_colors)
         yaws = _compute_yaws(players[tid])
-        for line in _emit_xform(f"p{tid}", players[tid], n_frames,
-                                z_m=0.0, custom=meta,
-                                child_lines=avatar, yaws=yaws):
+        if player_rel:
+            # Reference the rigged character; recolour it + team base ring.
+            children = _team_ring_lines(
+                f"{LOOKS_ROOT}/{_team_marker_name(team, team_colors)}")
+            if tid in top_pov_ids:
+                children = children + _pov_camera_lines("POV")
+            lines = _emit_xform(f"p{tid}", players[tid], n_frames, z_m=0.0,
+                                custom=meta, child_lines=children, yaws=yaws,
+                                reference=player_rel, recolor_mat=team_mat,
+                                ref_prim=args.player_asset_prim)
+        else:
+            avatar = _humanoid_lines(color, PLAYER_HEIGHT_M, PLAYER_RADIUS_M,
+                                      is_goalie=False, team_mat=team_mat)
+            if tid in top_pov_ids:
+                avatar = avatar + _pov_camera_lines("POV")
+            lines = _emit_xform(f"p{tid}", players[tid], n_frames, z_m=0.0,
+                                custom=meta, child_lines=avatar, yaws=yaws)
+        for line in lines:
             L.append("    " + line)
     L.append("    }")
     L.append("")
 
-    # Goalies -- same but a wider radius to suggest pads.
+    # Goalies -- same; the same rigged asset (or wider padded avatar).
     if goalies:
         L.append('    def Scope "Goalies"')
         L.append("    {")
         for tid in sorted(goalies):
             meta = goalies[tid].pop("_meta")
-            color = team_colors.get(meta.get("team", "unknown"), team_colors["unknown"])
-            team_mat = _team_mat_path(meta.get("team", "unknown"), team_colors)
-            avatar = _humanoid_lines(color, PLAYER_HEIGHT_M * 0.95,
-                                      GOALIE_RADIUS_M, is_goalie=True,
-                                      team_mat=team_mat)
-            for line in _emit_xform(f"g{tid}", goalies[tid], n_frames,
-                                    z_m=0.0, custom=meta, child_lines=avatar):
+            team = meta.get("team", "unknown")
+            color = team_colors.get(team, team_colors["unknown"])
+            team_mat = _team_mat_path(team, team_colors)
+            gyaws = _compute_yaws(goalies[tid])
+            if player_rel:
+                children = _team_ring_lines(
+                    f"{LOOKS_ROOT}/{_team_marker_name(team, team_colors)}")
+                lines = _emit_xform(f"g{tid}", goalies[tid], n_frames, z_m=0.0,
+                                    custom=meta, child_lines=children, yaws=gyaws,
+                                    reference=player_rel, recolor_mat=team_mat,
+                                    ref_prim=args.player_asset_prim)
+            else:
+                avatar = _humanoid_lines(color, PLAYER_HEIGHT_M * 0.95,
+                                          GOALIE_RADIUS_M, is_goalie=True,
+                                          team_mat=team_mat)
+                lines = _emit_xform(f"g{tid}", goalies[tid], n_frames, z_m=0.0,
+                                    custom=meta, child_lines=avatar, yaws=gyaws)
+            for line in lines:
                 L.append("    " + line)
         L.append("    }")
         L.append("")
